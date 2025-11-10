@@ -14,6 +14,7 @@ import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.component.upload.Upload;
 import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
 import com.vaadin.flow.data.value.ValueChangeMode;
+import com.vaadin.flow.dom.Style;
 import com.vaadin.flow.router.Route;
 import org.vaadin.firitin.components.TreeTable;
 import org.vaadin.firitin.components.button.VButton;
@@ -177,6 +178,8 @@ public class MainView extends VerticalLayout {
     }
 
     class DependencyTreeTable extends TreeTable<DependencyNode> {
+        private String currentSearchText = "";
+
         DependencyTreeTable() {
             setSizeFull();
             addHierarchyColumn(DependencyNode::getCoordinates).setHeader("Dependency");
@@ -184,9 +187,26 @@ public class MainView extends VerticalLayout {
             addColumn(node -> node.isOptional() ? "Yes" : "No").setHeader("Optional").setWidth("100px").setFlexGrow(0);
             getColumns().forEach(c -> c.setResizable(true));
             setVisible(false);
+
             getStyle()
                     .setBorder("1px solid var(--lumo-contrast-10pct)")
                     .setBorderRadius("var(--lumo-border-radius-m)");
+
+            // Use withRowStyler to highlight matching rows
+            withRowStyler((node, style) -> {
+                if (currentSearchText != null && !currentSearchText.trim().isEmpty()) {
+                    String lowerSearch = currentSearchText.toLowerCase();
+                    if (node.getCoordinates().toLowerCase().contains(lowerSearch)) {
+                        style.setBackground("var(--lumo-primary-color-10pct)");
+                        style.setFontWeight("500");
+                    }
+                }
+            });
+        }
+
+        void updateSearchHighlight(String searchText) {
+            this.currentSearchText = searchText;
+            getDataProvider().refreshAll();
         }
     }
 
@@ -233,6 +253,9 @@ public class MainView extends VerticalLayout {
         String searchText = filterBar.searchField.getValue();
         String scopeValue = filterBar.scopeFilter.getValue();
         boolean showOptionals = filterBar.showOptionalsFilter.getValue();
+
+        // Update search highlighting
+        ((DependencyTreeTable) treeTable).updateSearchHighlight(searchText);
 
         List<DependencyNode> filteredRoots = filterDependencyTree(
                 List.of(rootNode),
