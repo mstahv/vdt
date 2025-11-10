@@ -35,85 +35,104 @@ public class MainView extends VerticalLayout {
         setPadding(true);
         setSpacing(true);
 
-        // Header
-        H1 title = new H1("Maven Dependency Analyzer");
-        title.getStyle().set("margin-bottom", "0");
-
-        Paragraph description = new Paragraph(
-                "Analyze Maven dependencies by uploading a pom.xml file or entering Maven coordinates."
+        add(
+                new Header(),
+                new CoordinatesInputSection(),
+                new PomUploadSection(),
+                treeTable = new DependencyTreeTable()
         );
-        description.getStyle().set("color", "var(--lumo-secondary-text-color)");
-        description.getStyle().set("margin-top", "0.5em");
-
-        // Maven coordinates input section
-        TextField coordinatesField = new TextField("Maven Coordinates");
-        coordinatesField.setPlaceholder("e.g., org.springframework.boot:spring-boot-starter-web:3.2.0");
-        coordinatesField.setWidthFull();
-        coordinatesField.getStyle().set("max-width", "600px");
-
-        Button analyzeButton = new Button("Analyze", event -> {
-            String coordinates = coordinatesField.getValue();
-            if (coordinates != null && !coordinates.trim().isEmpty()) {
-                analyzeDependencies(coordinates);
-            }
-        });
-        analyzeButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-
-
-        HorizontalLayout coordinatesLayout = new HorizontalLayout(coordinatesField, analyzeButton);
-        try {
-            String pomcontent = Files.readString(Path.of("./pom.xml"));
-            Button testThis = new VButton("Analyze this project" , e-> {
-                analyzePomFile(pomcontent);
-            });
-            coordinatesLayout.add(testThis);
-        } catch (IOException e) {
-        }
-        coordinatesLayout.setAlignItems(Alignment.END);
-        coordinatesLayout.setWidthFull();
-        coordinatesLayout.getStyle()
-                .set("padding", "var(--lumo-space-m)")
-                .set("background", "var(--lumo-contrast-5pct)")
-                .set("border-radius", "var(--lumo-border-radius-m)");
-
-        // POM file upload section
-        MemoryBuffer buffer = new MemoryBuffer();
-        Upload upload = new Upload(buffer);
-        upload.setAcceptedFileTypes(".xml", "text/xml", "application/xml");
-        upload.setMaxFiles(1);
-        upload.setMaxFileSize(5 * 1024 * 1024); // 5MB
-        upload.setWidthFull();
-        upload.getStyle()
-                .set("padding", "var(--lumo-space-m)")
-                .set("background", "var(--lumo-contrast-5pct)")
-                .set("border-radius", "var(--lumo-border-radius-m)");
-
-        upload.addSucceededListener(event -> {
-            try {
-                InputStream inputStream = buffer.getInputStream();
-                String pomContent = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
-                analyzePomFile(pomContent);
-            } catch (Exception e) {
-                showError("Failed to read file: " + e.getMessage());
-            }
-        });
-
-        // TreeTable for displaying dependencies
-        treeTable = new TreeTable<>();
-        treeTable.setSizeFull();
-
-        treeTable.addHierarchyColumn(DependencyNode::getCoordinates).setHeader("Dependency");
-        treeTable.addColumn(DependencyNode::getScope).setHeader("Scope").setAutoWidth(true).setFlexGrow(0);
-        treeTable.addColumn(node -> node.isOptional() ? "Yes" : "No").setHeader("Optional").setWidth("100px").setFlexGrow(0);
-        treeTable.getColumns().forEach(c -> c.setResizable(true));
-        treeTable.setVisible(false);
-        treeTable.getStyle()
-                .setBorder("1px solid var(--lumo-contrast-10pct)")
-                .setBorderRadius("var(--lumo-border-radius-m)");
-
-        // Layout
-        add(title, description, coordinatesLayout, upload, treeTable);
         setFlexGrow(1, treeTable);
+    }
+
+    class Header extends VerticalLayout {
+        Header() {
+            setSpacing(false);
+            setPadding(false);
+
+            H1 title = new H1("Maven Dependency Analyzer");
+            title.getStyle().setMarginBottom("0");
+
+            Paragraph description = new Paragraph(
+                    "Analyze Maven dependencies by uploading a pom.xml file or entering Maven coordinates."
+            );
+            description.getStyle()
+                    .setColor("var(--lumo-secondary-text-color)")
+                    .setMarginTop("0.5em");
+
+            add(title, description);
+        }
+    }
+
+    class CoordinatesInputSection extends HorizontalLayout {
+        CoordinatesInputSection() {
+            setAlignItems(Alignment.END);
+            setWidthFull();
+            getStyle()
+                    .setPadding("var(--lumo-space-m)")
+                    .setBackground("var(--lumo-contrast-5pct)")
+                    .setBorderRadius("var(--lumo-border-radius-m)");
+
+            TextField coordinatesField = new TextField("Maven Coordinates");
+            coordinatesField.setPlaceholder("e.g., org.springframework.boot:spring-boot-starter-web:3.2.0");
+            coordinatesField.setWidthFull();
+            coordinatesField.getStyle().setMaxWidth("600px");
+
+            Button analyzeButton = new Button("Analyze", event -> {
+                String coordinates = coordinatesField.getValue();
+                if (coordinates != null && !coordinates.trim().isEmpty()) {
+                    analyzeDependencies(coordinates);
+                }
+            });
+            analyzeButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+            add(coordinatesField, analyzeButton);
+
+            try {
+                String pomContent = Files.readString(Path.of("./pom.xml"));
+                add(new VButton("Analyze this project", e -> analyzePomFile(pomContent)));
+            } catch (IOException e) {
+                // No project pom.xml available
+            }
+        }
+    }
+
+    class PomUploadSection extends Upload {
+        PomUploadSection() {
+            MemoryBuffer buffer = new MemoryBuffer();
+            setReceiver(buffer);
+            setAcceptedFileTypes(".xml", "text/xml", "application/xml");
+            setMaxFiles(1);
+            setMaxFileSize(5 * 1024 * 1024); // 5MB
+            setWidthFull();
+            getStyle()
+                    .setPadding("var(--lumo-space-m)")
+                    .setBackground("var(--lumo-contrast-5pct)")
+                    .setBorderRadius("var(--lumo-border-radius-m)");
+
+            addSucceededListener(event -> {
+                try {
+                    InputStream inputStream = buffer.getInputStream();
+                    String pomContent = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+                    analyzePomFile(pomContent);
+                } catch (Exception e) {
+                    showError("Failed to read file: " + e.getMessage());
+                }
+            });
+        }
+    }
+
+    class DependencyTreeTable extends TreeTable<DependencyNode> {
+        DependencyTreeTable() {
+            setSizeFull();
+            addHierarchyColumn(DependencyNode::getCoordinates).setHeader("Dependency");
+            addColumn(DependencyNode::getScope).setHeader("Scope").setAutoWidth(true).setFlexGrow(0);
+            addColumn(node -> node.isOptional() ? "Yes" : "No").setHeader("Optional").setWidth("100px").setFlexGrow(0);
+            getColumns().forEach(c -> c.setResizable(true));
+            setVisible(false);
+            getStyle()
+                    .setBorder("1px solid var(--lumo-contrast-10pct)")
+                    .setBorderRadius("var(--lumo-border-radius-m)");
+        }
     }
 
     private void analyzeDependencies(String coordinates) {
