@@ -81,8 +81,15 @@ public class MavenDependencyService {
      * Resolves dependencies for a given artifact.
      */
     public DependencyNode resolveDependencies(String groupId, String artifactId, String version) throws Exception {
+        return resolveDependencies(groupId, artifactId, version, "compile");
+    }
+
+    /**
+     * Resolves dependencies for a given artifact with a specific scope.
+     */
+    public DependencyNode resolveDependencies(String groupId, String artifactId, String version, String scope) throws Exception {
         Artifact artifact = new DefaultArtifact(groupId, artifactId, "jar", version);
-        Dependency dependency = new Dependency(artifact, "compile");
+        Dependency dependency = new Dependency(artifact, scope != null ? scope : "compile");
 
         CollectRequest collectRequest = new CollectRequest();
         collectRequest.setRoot(dependency);
@@ -128,13 +135,20 @@ public class MavenDependencyService {
             // Resolve each dependency
             for (org.apache.maven.model.Dependency dep : model.getDependencies()) {
                 try {
+                    String scope = dep.getScope() != null ? dep.getScope() : "compile";
                     DependencyNode depNode = resolveDependencies(
                             dep.getGroupId(),
                             dep.getArtifactId(),
-                            dep.getVersion()
+                            dep.getVersion(),
+                            scope
                     );
-                    depNode.setScope(dep.getScope());
                     depNode.setOptional("true".equals(dep.getOptional()));
+
+                    // Propagate scope to transitive dependencies for non-compile scopes
+                    if (!"compile".equals(scope)) {
+                        propagateScope(depNode, scope);
+                    }
+
                     root.addChild(depNode);
                 } catch (Exception e) {
                     // Create a node for unresolvable dependency
@@ -178,6 +192,22 @@ public class MavenDependencyService {
         }
 
         return depNode;
+    }
+
+    /**
+     * Propagates scope to all transitive dependencies.
+     * Used for test/provided/runtime scopes to show effective scope in the tree.
+     */
+    private void propagateScope(DependencyNode node, String scope) {
+        node.setScope(scope);
+        if (node.getChildren() != null) {
+            for (DependencyNode child : node.getChildren()) {
+                // Only propagate if child doesn't already have a more restrictive scope
+                if (child.getScope() == null || "compile".equals(child.getScope())) {
+                    propagateScope(child, scope);
+                }
+            }
+        }
     }
 
     /**
