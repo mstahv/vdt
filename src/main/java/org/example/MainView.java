@@ -192,8 +192,23 @@ public class MainView extends VerticalLayout {
                     .setBorder("1px solid var(--lumo-contrast-10pct)")
                     .setBorderRadius("var(--lumo-border-radius-m)");
 
-            // Use withRowStyler to highlight matching rows
+            // Use withRowStyler to highlight matching rows and color by scope
             withRowStyler((node, style) -> {
+                // Color based on scope and optional status
+                String scope = node.getScope();
+                boolean isOptional = node.isOptional();
+
+                if (isOptional) {
+                    // Optional dependencies are gray regardless of scope
+                    style.setColor("var(--lumo-disabled-text-color)");
+                } else if ("test".equals(scope)) {
+                    style.setColor("var(--lumo-warning-text-color)");
+                } else if (scope != null && !"compile".equals(scope) && !"runtime".equals(scope)) {
+                    // All other scopes (provided, system, etc.) get gray color
+                    style.setColor("var(--lumo-disabled-text-color)");
+                }
+
+                // Search highlighting (overrides background)
                 if (currentSearchText != null && !currentSearchText.trim().isEmpty()) {
                     String lowerSearch = currentSearchText.toLowerCase();
                     if (node.getCoordinates().toLowerCase().contains(lowerSearch)) {
