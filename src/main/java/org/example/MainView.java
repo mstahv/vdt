@@ -37,7 +37,9 @@ public class MainView extends VerticalLayout {
     private final PomUploadSection pomUploadSection;
     private final FilterBar filterBar;
     private final SummarySection summarySection;
+    private final Header header;
     private DependencyNode rootNode;
+    private String lastAnalyzedCoordinates = "";
 
     public MainView(MavenDependencyService dependencyService) {
         this.dependencyService = dependencyService;
@@ -52,8 +54,10 @@ public class MainView extends VerticalLayout {
         summarySection = new SummarySection();
         summarySection.setVisible(false);
 
+        header = new Header();
+
         add(
-                new Header(),
+                header,
                 coordinatesInputSection = new CoordinatesInputSection(),
                 pomUploadSection = new PomUploadSection(),
                 filterBar,
@@ -63,26 +67,62 @@ public class MainView extends VerticalLayout {
         setFlexGrow(1, treeTable);
     }
 
-    class Header extends VerticalLayout {
+    class Header extends HorizontalLayout {
+        private final H1 title;
+        private final Paragraph description;
+        private final Paragraph projectInfo;
+        private final Button newAnalysisButton;
+
         Header() {
-            setSpacing(false);
+            setAlignItems(Alignment.BASELINE);
+            setWidthFull();
             setPadding(false);
 
-            H1 title = new H1("Maven Dependency Analyzer");
-            title.getStyle().setMarginBottom("0");
+            title = new H1("Maven Dependency Analyzer");
+            title.getStyle().setMargin("0");
 
-            Paragraph description = new Paragraph(
+            description = new Paragraph(
                     "Analyze Maven dependencies by uploading a pom.xml file or entering Maven coordinates."
             );
             description.getStyle()
                     .setColor("var(--lumo-secondary-text-color)")
-                    .setMarginTop("0.5em");
+                    .setMargin("0")
+                    .setMarginLeft("var(--lumo-space-m)");
 
-            add(title, description);
+            projectInfo = new Paragraph();
+            projectInfo.getStyle()
+                    .setColor("var(--lumo-secondary-text-color)")
+                    .setMargin("0")
+                    .setMarginLeft("var(--lumo-space-m)")
+                    .setFontSize("var(--lumo-font-size-m)");
+            projectInfo.setVisible(false);
+
+            newAnalysisButton = new VButton("New Analysis", e -> resetToInputMode());
+            newAnalysisButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
+            newAnalysisButton.setVisible(false);
+
+            add(title, description, projectInfo, newAnalysisButton);
+            setFlexGrow(1, description);
+            setFlexGrow(1, projectInfo);
+        }
+
+        void showInputMode() {
+            description.setVisible(true);
+            projectInfo.setVisible(false);
+            newAnalysisButton.setVisible(false);
+        }
+
+        void showAnalysisMode(String projectName) {
+            description.setVisible(false);
+            projectInfo.setText(projectName);
+            projectInfo.setVisible(true);
+            newAnalysisButton.setVisible(true);
         }
     }
 
     class CoordinatesInputSection extends HorizontalLayout {
+        private final TextField coordinatesField;
+
         CoordinatesInputSection() {
             setAlignItems(Alignment.END);
             setWidthFull();
@@ -91,7 +131,7 @@ public class MainView extends VerticalLayout {
                     .setBackground("var(--lumo-contrast-5pct)")
                     .setBorderRadius("var(--lumo-border-radius-m)");
 
-            TextField coordinatesField = new TextField("Maven Coordinates");
+            coordinatesField = new TextField("Maven Coordinates");
             coordinatesField.setPlaceholder("e.g., org.springframework.boot:spring-boot-starter-web:3.2.0");
             coordinatesField.setWidthFull();
             coordinatesField.getStyle().setMaxWidth("600px");
@@ -112,6 +152,10 @@ public class MainView extends VerticalLayout {
             } catch (IOException e) {
                 // No project pom.xml available
             }
+        }
+
+        void setCoordinates(String coordinates) {
+            coordinatesField.setValue(coordinates != null ? coordinates : "");
         }
     }
 
@@ -160,13 +204,13 @@ public class MainView extends VerticalLayout {
             searchField.addValueChangeListener(e -> applyFilters());
             searchField.setWidthFull();
 
-            scopeFilter = new ComboBox<>("Scope");
-            scopeFilter.setItems("All", "compile", "test", "runtime", "provided", "system");
+            scopeFilter = new ComboBox<>();
+            scopeFilter.setItems("All scopes", "compile", "test", "runtime", "provided", "system");
             scopeFilter.setValue("All");
             scopeFilter.addValueChangeListener(e -> applyFilters());
             scopeFilter.setWidth("150px");
 
-            showOptionalsFilter = new Checkbox("Show optionals");
+            showOptionalsFilter = new Checkbox("Show_optionals");
             showOptionalsFilter.setValue(false);
             showOptionalsFilter.addValueChangeListener(e -> applyFilters());
 
@@ -317,8 +361,10 @@ public class MainView extends VerticalLayout {
 
     private void analyzeDependencies(String coordinates) {
         try {
+            lastAnalyzedCoordinates = coordinates;
             DependencyNode root = dependencyService.resolveDependencies(coordinates);
-            displayDependencyTree(root);
+            String projectInfo = coordinates;
+            displayDependencyTree(root, projectInfo);
             showSuccess("Dependencies resolved successfully!");
         } catch (Exception e) {
             showError("Failed to resolve dependencies: " + e.getMessage());
@@ -328,19 +374,25 @@ public class MainView extends VerticalLayout {
     private void analyzePomFile(String pomContent) {
         try {
             DependencyNode root = dependencyService.resolveDependenciesFromPom(pomContent);
-            displayDependencyTree(root);
+            // Build project info string
+            String projectInfo = root.getGroupId() + ":" + root.getArtifactId() + ":" + root.getVersion();
+            lastAnalyzedCoordinates = projectInfo;
+            displayDependencyTree(root, projectInfo);
             showSuccess("POM file analyzed successfully!");
         } catch (Exception e) {
             showError("Failed to analyze POM file: " + e.getMessage());
         }
     }
 
-    private void displayDependencyTree(DependencyNode root) {
+    private void displayDependencyTree(DependencyNode root, String projectInfo) {
         this.rootNode = root;
 
         // Hide input sections
         coordinatesInputSection.setVisible(false);
         pomUploadSection.setVisible(false);
+
+        // Update header to analysis mode
+        header.showAnalysisMode(projectInfo);
 
         // Show filter bar and summary
         filterBar.setVisible(true);
@@ -350,6 +402,24 @@ public class MainView extends VerticalLayout {
         // Display the tree
         applyFilters();
         treeTable.setVisible(true);
+    }
+
+    private void resetToInputMode() {
+        // Hide analysis components
+        treeTable.setVisible(false);
+        filterBar.setVisible(false);
+        summarySection.setVisible(false);
+
+        // Show input sections
+        coordinatesInputSection.setVisible(true);
+        coordinatesInputSection.setCoordinates(lastAnalyzedCoordinates);
+        pomUploadSection.setVisible(true);
+
+        // Update header to input mode
+        header.showInputMode();
+
+        // Clear state
+        rootNode = null;
     }
 
     private void applyFilters() {
