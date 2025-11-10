@@ -185,9 +185,9 @@ public class MainView extends VerticalLayout {
     }
 
     class FilterBar extends HorizontalLayout {
-        private final TextField searchField;
-        private final ComboBox<String> scopeFilter;
-        private final Checkbox showOptionalsFilter;
+        final SearchField searchField;
+        final ScopeFilter scopeFilter;
+        final ShowOptionalsCheckbox showOptionalsFilter;
 
         FilterBar() {
             setAlignItems(Alignment.BASELINE);
@@ -197,24 +197,11 @@ public class MainView extends VerticalLayout {
                     .setBackground("var(--lumo-contrast-5pct)")
                     .setBorderRadius("var(--lumo-border-radius-m)");
 
-            searchField = new TextField();
-            searchField.setPlaceholder("Filter dependencies...");
-            searchField.setPrefixComponent(new com.vaadin.flow.component.icon.Icon("vaadin", "search"));
-            searchField.setValueChangeMode(ValueChangeMode.LAZY);
-            searchField.addValueChangeListener(e -> applyFilters());
-            searchField.setWidthFull();
+            searchField = new SearchField();
+            scopeFilter = new ScopeFilter();
+            showOptionalsFilter = new ShowOptionalsCheckbox();
 
-            scopeFilter = new ComboBox<>();
-            scopeFilter.setItems("All scopes", "compile", "test", "runtime", "provided", "system");
-            scopeFilter.setValue("All");
-            scopeFilter.addValueChangeListener(e -> applyFilters());
-            scopeFilter.setWidth("150px");
-
-            showOptionalsFilter = new Checkbox("Show_optionals");
-            showOptionalsFilter.setValue(false);
-            showOptionalsFilter.addValueChangeListener(e -> applyFilters());
-
-            Button resetButton = new VButton("Reset", e -> {
+            var resetButton = new VButton("Reset", e -> {
                 searchField.clear();
                 scopeFilter.setValue("All");
                 showOptionalsFilter.setValue(false);
@@ -223,6 +210,33 @@ public class MainView extends VerticalLayout {
 
             add(searchField, scopeFilter, showOptionalsFilter, resetButton);
             setFlexGrow(1, searchField);
+        }
+
+        class SearchField extends TextField {
+            SearchField() {
+                setPlaceholder("Filter dependencies...");
+                setPrefixComponent(new com.vaadin.flow.component.icon.Icon("vaadin", "search"));
+                setValueChangeMode(ValueChangeMode.LAZY);
+                addValueChangeListener(e -> applyFilters());
+                setWidthFull();
+            }
+        }
+
+        class ScopeFilter extends ComboBox<String> {
+            ScopeFilter() {
+                setItems("All scopes", "compile", "test", "runtime", "provided", "system");
+                setValue("All");
+                addValueChangeListener(e -> applyFilters());
+                setWidth("150px");
+            }
+        }
+
+        class ShowOptionalsCheckbox extends Checkbox {
+            ShowOptionalsCheckbox() {
+                super("Show optionals");
+                setValue(false);
+                addValueChangeListener(e -> applyFilters());
+            }
         }
     }
 
