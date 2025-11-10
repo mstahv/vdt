@@ -197,13 +197,20 @@ public class MavenDependencyService {
     /**
      * Propagates scope to all transitive dependencies.
      * Used for test/provided/runtime scopes to show effective scope in the tree.
+     * Maven scope rules: test and provided override all child scopes, runtime only overrides compile.
      */
     private void propagateScope(DependencyNode node, String scope) {
         node.setScope(scope);
         if (node.getChildren() != null) {
             for (DependencyNode child : node.getChildren()) {
-                // Only propagate if child doesn't already have a more restrictive scope
-                if (child.getScope() == null || "compile".equals(child.getScope())) {
+                String childScope = child.getScope();
+
+                // Test and provided scopes override everything
+                if ("test".equals(scope) || "provided".equals(scope)) {
+                    propagateScope(child, scope);
+                }
+                // Runtime scope only overrides compile
+                else if ("runtime".equals(scope) && (childScope == null || "compile".equals(childScope))) {
                     propagateScope(child, scope);
                 }
             }

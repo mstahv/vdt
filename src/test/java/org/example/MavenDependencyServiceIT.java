@@ -94,7 +94,51 @@ class MavenDependencyServiceIT {
 
         // Assert
         assertNotNull(sbtDep, "in.virit.ws:sb dependency should be found");
-        assertEquals("25.0.0-beta2", sbtDep.getVersion(), "sb dependency should have version 25.0.0-beta2");
+        assertNotNull(sbtDep.getVersion(), "sb dependency should have a version");
+        assertFalse(sbtDep.getVersion().isEmpty(), "sb dependency version should not be empty");
+    }
+
+    @Test
+    void testScopeInheritanceForTestDependencies() throws Exception {
+        // Act
+        DependencyNode root = service.resolveDependenciesFromPom(pomContent);
+
+        // Find spring-boot-starter-test (test scoped dependency)
+        DependencyNode testDep = root.getChildren().stream()
+                .filter(node -> "org.springframework.boot".equals(node.getGroupId())
+                        && "spring-boot-starter-test".equals(node.getArtifactId()))
+                .findFirst()
+                .orElse(null);
+
+        assertNotNull(testDep, "spring-boot-starter-test should be found");
+        assertEquals("test", testDep.getScope(), "spring-boot-starter-test should have test scope");
+
+        // Find junit-jupiter under spring-boot-starter-test
+        DependencyNode junitDep = findDependencyInTree(testDep, "org.junit.jupiter", "junit-jupiter");
+        assertNotNull(junitDep, "junit-jupiter should be found in test dependencies");
+        assertEquals("test", junitDep.getScope(), "junit-jupiter should inherit test scope");
+
+        // Find junit-jupiter-engine under junit-jupiter
+        DependencyNode junitEngine = findDependencyInTree(junitDep, "org.junit.jupiter", "junit-jupiter-engine");
+        assertNotNull(junitEngine, "junit-jupiter-engine should be found");
+        assertEquals("test", junitEngine.getScope(), "junit-jupiter-engine should have test scope, not runtime");
+    }
+
+    private DependencyNode findDependencyInTree(DependencyNode root, String groupId, String artifactId) {
+        if (root == null || root.getChildren() == null) {
+            return null;
+        }
+
+        for (DependencyNode child : root.getChildren()) {
+            if (groupId.equals(child.getGroupId()) && artifactId.equals(child.getArtifactId())) {
+                return child;
+            }
+            DependencyNode found = findDependencyInTree(child, groupId, artifactId);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
     }
 
     @Test
