@@ -2,6 +2,8 @@ package org.example;
 
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
+import com.vaadin.flow.component.checkbox.Checkbox;
+import com.vaadin.flow.component.combobox.ComboBox;
 import com.vaadin.flow.component.html.H1;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.notification.Notification;
@@ -11,6 +13,7 @@ import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.component.upload.Upload;
 import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
+import com.vaadin.flow.data.value.ValueChangeMode;
 import com.vaadin.flow.router.Route;
 import org.vaadin.firitin.components.TreeTable;
 import org.vaadin.firitin.components.button.VButton;
@@ -20,13 +23,19 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Route
 public class MainView extends VerticalLayout {
 
     private final MavenDependencyService dependencyService;
     private final TreeTable<DependencyNode> treeTable;
+    private final CoordinatesInputSection coordinatesInputSection;
+    private final PomUploadSection pomUploadSection;
+    private final FilterBar filterBar;
+    private DependencyNode rootNode;
 
     public MainView(MavenDependencyService dependencyService) {
         this.dependencyService = dependencyService;
@@ -35,10 +44,14 @@ public class MainView extends VerticalLayout {
         setPadding(true);
         setSpacing(true);
 
+        filterBar = new FilterBar();
+        filterBar.setVisible(false);
+
         add(
                 new Header(),
-                new CoordinatesInputSection(),
-                new PomUploadSection(),
+                coordinatesInputSection = new CoordinatesInputSection(),
+                pomUploadSection = new PomUploadSection(),
+                filterBar,
                 treeTable = new DependencyTreeTable()
         );
         setFlexGrow(1, treeTable);
@@ -121,6 +134,48 @@ public class MainView extends VerticalLayout {
         }
     }
 
+    class FilterBar extends HorizontalLayout {
+        private final TextField searchField;
+        private final ComboBox<String> scopeFilter;
+        private final Checkbox showOptionalsFilter;
+
+        FilterBar() {
+            setAlignItems(Alignment.BASELINE);
+            setWidthFull();
+            getStyle()
+                    .setPadding("var(--lumo-space-s)")
+                    .setBackground("var(--lumo-contrast-5pct)")
+                    .setBorderRadius("var(--lumo-border-radius-m)");
+
+            searchField = new TextField();
+            searchField.setPlaceholder("Filter dependencies...");
+            searchField.setPrefixComponent(new com.vaadin.flow.component.icon.Icon("vaadin", "search"));
+            searchField.setValueChangeMode(ValueChangeMode.LAZY);
+            searchField.addValueChangeListener(e -> applyFilters());
+            searchField.setWidthFull();
+
+            scopeFilter = new ComboBox<>("Scope");
+            scopeFilter.setItems("All", "compile", "test", "runtime", "provided", "system");
+            scopeFilter.setValue("All");
+            scopeFilter.addValueChangeListener(e -> applyFilters());
+            scopeFilter.setWidth("150px");
+
+            showOptionalsFilter = new Checkbox("Show optionals");
+            showOptionalsFilter.setValue(false);
+            showOptionalsFilter.addValueChangeListener(e -> applyFilters());
+
+            Button resetButton = new VButton("Reset", e -> {
+                searchField.clear();
+                scopeFilter.setValue("All");
+                showOptionalsFilter.setValue(false);
+            });
+            resetButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
+
+            add(searchField, scopeFilter, showOptionalsFilter, resetButton);
+            setFlexGrow(1, searchField);
+        }
+    }
+
     class DependencyTreeTable extends TreeTable<DependencyNode> {
         DependencyTreeTable() {
             setSizeFull();
@@ -156,8 +211,90 @@ public class MainView extends VerticalLayout {
     }
 
     private void displayDependencyTree(DependencyNode root) {
-        treeTable.setRootItems(List.of(root), DependencyNode::getChildren);
+        this.rootNode = root;
+
+        // Hide input sections
+        coordinatesInputSection.setVisible(false);
+        pomUploadSection.setVisible(false);
+
+        // Show filter bar
+        filterBar.setVisible(true);
+
+        // Display the tree
+        applyFilters();
         treeTable.setVisible(true);
+    }
+
+    private void applyFilters() {
+        if (rootNode == null) {
+            return;
+        }
+
+        String searchText = filterBar.searchField.getValue();
+        String scopeValue = filterBar.scopeFilter.getValue();
+        boolean showOptionals = filterBar.showOptionalsFilter.getValue();
+
+        List<DependencyNode> filteredRoots = filterDependencyTree(
+                List.of(rootNode),
+                searchText,
+                scopeValue,
+                showOptionals
+        );
+
+        treeTable.setRootItems(filteredRoots, node -> filterDependencyTree(
+                node.getChildren(),
+                searchText,
+                scopeValue,
+                showOptionals
+        ));
+    }
+
+    private List<DependencyNode> filterDependencyTree(List<DependencyNode> nodes,
+                                                       String searchText,
+                                                       String scope,
+                                                       boolean showOptionals) {
+        if (nodes == null) {
+            return new ArrayList<>();
+        }
+
+        return nodes.stream()
+                .filter(node -> matchesFilters(node, searchText, scope, showOptionals) ||
+                               hasMatchingChildren(node, searchText, scope, showOptionals))
+                .collect(Collectors.toList());
+    }
+
+    private boolean matchesFilters(DependencyNode node, String searchText, String scope, boolean showOptionals) {
+        // Text filter
+        if (searchText != null && !searchText.trim().isEmpty()) {
+            String lowerSearch = searchText.toLowerCase();
+            if (!node.getCoordinates().toLowerCase().contains(lowerSearch)) {
+                return false;
+            }
+        }
+
+        // Scope filter
+        if (!"All".equals(scope) && scope != null) {
+            if (!scope.equals(node.getScope())) {
+                return false;
+            }
+        }
+
+        // Optional filter - hide optional dependencies by default
+        if (!showOptionals && node.isOptional()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean hasMatchingChildren(DependencyNode node, String searchText, String scope, boolean showOptionals) {
+        if (node.getChildren() == null || node.getChildren().isEmpty()) {
+            return false;
+        }
+
+        return node.getChildren().stream()
+                .anyMatch(child -> matchesFilters(child, searchText, scope, showOptionals) ||
+                                  hasMatchingChildren(child, searchText, scope, showOptionals));
     }
 
     private void showSuccess(String message) {

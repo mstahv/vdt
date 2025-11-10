@@ -94,7 +94,7 @@ class MavenDependencyServiceIT {
 
         // Assert
         assertNotNull(sbtDep, "in.virit.ws:sb dependency should be found");
-        assertEquals("24.6.1", sbtDep.getVersion(), "sb dependency should have version 24.6.1");
+        assertEquals("25.0.0-beta2", sbtDep.getVersion(), "sb dependency should have version 25.0.0-beta2");
     }
 
     @Test
