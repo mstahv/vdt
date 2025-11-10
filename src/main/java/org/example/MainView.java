@@ -36,6 +36,7 @@ public class MainView extends VerticalLayout {
     private final CoordinatesInputSection coordinatesInputSection;
     private final PomUploadSection pomUploadSection;
     private final FilterBar filterBar;
+    private final SummarySection summarySection;
     private DependencyNode rootNode;
 
     public MainView(MavenDependencyService dependencyService) {
@@ -48,12 +49,16 @@ public class MainView extends VerticalLayout {
         filterBar = new FilterBar();
         filterBar.setVisible(false);
 
+        summarySection = new SummarySection();
+        summarySection.setVisible(false);
+
         add(
                 new Header(),
                 coordinatesInputSection = new CoordinatesInputSection(),
                 pomUploadSection = new PomUploadSection(),
                 filterBar,
-                treeTable = new DependencyTreeTable()
+                treeTable = new DependencyTreeTable(),
+                summarySection
         );
         setFlexGrow(1, treeTable);
     }
@@ -177,6 +182,91 @@ public class MainView extends VerticalLayout {
         }
     }
 
+    class SummarySection extends HorizontalLayout {
+        private final Paragraph summaryText;
+
+        SummarySection() {
+            setWidthFull();
+            getStyle()
+                    .setPadding("var(--lumo-space-s)")
+                    .setBackground("var(--lumo-contrast-5pct)")
+                    .setBorderRadius("var(--lumo-border-radius-m)");
+
+            summaryText = new Paragraph();
+            summaryText.getStyle()
+                    .setMargin("0")
+                    .setFontSize("var(--lumo-font-size-s)")
+                    .setColor("var(--lumo-secondary-text-color)");
+
+            add(summaryText);
+        }
+
+        void updateSummary(DependencyNode root) {
+            int totalDeps = countAllDependencies(root);
+            int compileDeps = countByScope(root, "compile");
+            int runtimeDeps = countByScope(root, "runtime");
+            int testDeps = countByScope(root, "test");
+            int providedDeps = countByScope(root, "provided");
+            int systemDeps = countByScope(root, "system");
+            int optionalDeps = countOptionalDependencies(root);
+
+            StringBuilder summary = new StringBuilder();
+            summary.append("Total: ").append(totalDeps).append(" dependencies");
+            summary.append(" | Compile: ").append(compileDeps);
+            summary.append(" | Runtime: ").append(runtimeDeps);
+            summary.append(" | Test: ").append(testDeps);
+
+            if (providedDeps > 0) {
+                summary.append(" | Provided: ").append(providedDeps);
+            }
+            if (systemDeps > 0) {
+                summary.append(" | System: ").append(systemDeps);
+            }
+            if (optionalDeps > 0) {
+                summary.append(" | Optional: ").append(optionalDeps);
+            }
+
+            summaryText.setText(summary.toString());
+        }
+
+        private int countAllDependencies(DependencyNode node) {
+            int count = 0;
+            if (node.getChildren() != null) {
+                for (DependencyNode child : node.getChildren()) {
+                    count++; // Count this node
+                    count += countAllDependencies(child); // Count children recursively
+                }
+            }
+            return count;
+        }
+
+        private int countByScope(DependencyNode node, String scope) {
+            int count = 0;
+            if (node.getChildren() != null) {
+                for (DependencyNode child : node.getChildren()) {
+                    if (scope.equals(child.getScope())) {
+                        count++;
+                    }
+                    count += countByScope(child, scope);
+                }
+            }
+            return count;
+        }
+
+        private int countOptionalDependencies(DependencyNode node) {
+            int count = 0;
+            if (node.getChildren() != null) {
+                for (DependencyNode child : node.getChildren()) {
+                    if (child.isOptional()) {
+                        count++;
+                    }
+                    count += countOptionalDependencies(child);
+                }
+            }
+            return count;
+        }
+    }
+
     class DependencyTreeTable extends TreeTable<DependencyNode> {
         private String currentSearchText = "";
 
@@ -252,8 +342,10 @@ public class MainView extends VerticalLayout {
         coordinatesInputSection.setVisible(false);
         pomUploadSection.setVisible(false);
 
-        // Show filter bar
+        // Show filter bar and summary
         filterBar.setVisible(true);
+        summarySection.setVisible(true);
+        summarySection.updateSummary(root);
 
         // Display the tree
         applyFilters();
