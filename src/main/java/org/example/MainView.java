@@ -187,6 +187,7 @@ public class MainView extends VerticalLayout {
         final SearchField searchField;
         final ScopeFilter scopeFilter;
         final ShowOptionalsCheckbox showOptionalsFilter;
+        final ShowOmittedCheckbox showOmittedFilter;
 
         FilterBar() {
             setAlignItems(Alignment.BASELINE);
@@ -199,15 +200,17 @@ public class MainView extends VerticalLayout {
             searchField = new SearchField();
             scopeFilter = new ScopeFilter();
             showOptionalsFilter = new ShowOptionalsCheckbox();
+            showOmittedFilter = new ShowOmittedCheckbox();
 
             var resetButton = new VButton("Reset", e -> {
                 searchField.clear();
                 scopeFilter.setValue("All");
                 showOptionalsFilter.setValue(false);
+                showOmittedFilter.setValue(false);
             });
             resetButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
 
-            add(searchField, scopeFilter, showOptionalsFilter, resetButton);
+            add(searchField, scopeFilter, showOptionalsFilter, showOmittedFilter, resetButton);
             setFlexGrow(1, searchField);
         }
 
@@ -233,6 +236,14 @@ public class MainView extends VerticalLayout {
         class ShowOptionalsCheckbox extends Checkbox {
             ShowOptionalsCheckbox() {
                 super("Show optionals");
+                setValue(false);
+                addValueChangeListener(e -> applyFilters());
+            }
+        }
+
+        class ShowOmittedCheckbox extends Checkbox {
+            ShowOmittedCheckbox() {
+                super("Show omitted");
                 setValue(false);
                 addValueChangeListener(e -> applyFilters());
             }
@@ -332,6 +343,7 @@ public class MainView extends VerticalLayout {
             addHierarchyColumn(DependencyNode::getCoordinates).setHeader("Dependency");
             addColumn(DependencyNode::getScope).setHeader("Scope").setAutoWidth(true).setFlexGrow(0);
             addColumn(node -> node.isOptional() ? "Yes" : "No").setHeader("Optional").setWidth("100px").setFlexGrow(0);
+            addColumn(node -> node.getOmittedReason() != null ? node.getOmittedReason() : "").setHeader("Omitted").setAutoWidth(true);
             addColumn(node -> node.getNotes() != null ? node.getNotes() : "").setHeader("Notes").setAutoWidth(true);
             getColumns().forEach(c -> c.setResizable(true));
             setVisible(false);
@@ -342,18 +354,23 @@ public class MainView extends VerticalLayout {
 
             // Use withRowStyler to highlight matching rows and color by scope
             withRowStyler((node, style) -> {
-                // Color based on scope and optional status
-                String scope = node.getScope();
-                boolean isOptional = node.isOptional();
+                // Color based on omitted status (highest priority)
+                if (node.isOmitted()) {
+                    style.setColor("gold");
+                } else {
+                    // Color based on scope and optional status
+                    String scope = node.getScope();
+                    boolean isOptional = node.isOptional();
 
-                if (isOptional) {
-                    // Optional dependencies are gray regardless of scope
-                    style.setColor("var(--lumo-disabled-text-color)");
-                } else if ("test".equals(scope)) {
-                    style.setColor("var(--lumo-warning-text-color)");
-                } else if (scope != null && !"compile".equals(scope) && !"runtime".equals(scope)) {
-                    // All other scopes (provided, system, etc.) get gray color
-                    style.setColor("var(--lumo-disabled-text-color)");
+                    if (isOptional) {
+                        // Optional dependencies are gray regardless of scope
+                        style.setColor("var(--lumo-disabled-text-color)");
+                    } else if ("test".equals(scope)) {
+                        style.setColor("var(--lumo-warning-text-color)");
+                    } else if (scope != null && !"compile".equals(scope) && !"runtime".equals(scope)) {
+                        // All other scopes (provided, system, etc.) get gray color
+                        style.setColor("var(--lumo-disabled-text-color)");
+                    }
                 }
 
                 // Search highlighting (overrides background)
@@ -444,6 +461,7 @@ public class MainView extends VerticalLayout {
         String searchText = filterBar.searchField.getValue();
         String scopeValue = filterBar.scopeFilter.getValue();
         boolean showOptionals = filterBar.showOptionalsFilter.getValue();
+        boolean showOmitted = filterBar.showOmittedFilter.getValue();
 
         // Update search highlighting
         ((DependencyTreeTable) treeTable).updateSearchHighlight(searchText);
@@ -452,32 +470,35 @@ public class MainView extends VerticalLayout {
                 List.of(rootNode),
                 searchText,
                 scopeValue,
-                showOptionals
+                showOptionals,
+                showOmitted
         );
 
         treeTable.setRootItems(filteredRoots, node -> filterDependencyTree(
                 node.getChildren(),
                 searchText,
                 scopeValue,
-                showOptionals
+                showOptionals,
+                showOmitted
         ));
     }
 
     private List<DependencyNode> filterDependencyTree(List<DependencyNode> nodes,
                                                        String searchText,
                                                        String scope,
-                                                       boolean showOptionals) {
+                                                       boolean showOptionals,
+                                                       boolean showOmitted) {
         if (nodes == null) {
             return new ArrayList<>();
         }
 
         return nodes.stream()
-                .filter(node -> matchesFilters(node, searchText, scope, showOptionals) ||
-                               hasMatchingChildren(node, searchText, scope, showOptionals))
+                .filter(node -> matchesFilters(node, searchText, scope, showOptionals, showOmitted) ||
+                               hasMatchingChildren(node, searchText, scope, showOptionals, showOmitted))
                 .collect(Collectors.toList());
     }
 
-    private boolean matchesFilters(DependencyNode node, String searchText, String scope, boolean showOptionals) {
+    private boolean matchesFilters(DependencyNode node, String searchText, String scope, boolean showOptionals, boolean showOmitted) {
         // Text filter
         if (searchText != null && !searchText.trim().isEmpty()) {
             String lowerSearch = searchText.toLowerCase();
@@ -498,17 +519,22 @@ public class MainView extends VerticalLayout {
             return false;
         }
 
+        // Omitted filter - hide omitted dependencies by default
+        if (!showOmitted && node.isOmitted()) {
+            return false;
+        }
+
         return true;
     }
 
-    private boolean hasMatchingChildren(DependencyNode node, String searchText, String scope, boolean showOptionals) {
+    private boolean hasMatchingChildren(DependencyNode node, String searchText, String scope, boolean showOptionals, boolean showOmitted) {
         if (node.getChildren() == null || node.getChildren().isEmpty()) {
             return false;
         }
 
         return node.getChildren().stream()
-                .anyMatch(child -> matchesFilters(child, searchText, scope, showOptionals) ||
-                                  hasMatchingChildren(child, searchText, scope, showOptionals));
+                .anyMatch(child -> matchesFilters(child, searchText, scope, showOptionals, showOmitted) ||
+                                  hasMatchingChildren(child, searchText, scope, showOptionals, showOmitted));
     }
 
     private void showSuccess(String message) {

@@ -14,6 +14,8 @@ public class DependencyNode {
     private String type;
     private boolean optional;
     private String notes;
+    private boolean omitted;
+    private String omittedReason;
     private List<DependencyNode> children = new ArrayList<>();
 
     public DependencyNode(String groupId, String artifactId, String version) {
@@ -85,6 +87,22 @@ public class DependencyNode {
 
     public void setNotes(String notes) {
         this.notes = notes;
+    }
+
+    public boolean isOmitted() {
+        return omitted;
+    }
+
+    public void setOmitted(boolean omitted) {
+        this.omitted = omitted;
+    }
+
+    public String getOmittedReason() {
+        return omittedReason;
+    }
+
+    public void setOmittedReason(String omittedReason) {
+        this.omittedReason = omittedReason;
     }
 
     public List<DependencyNode> getChildren() {

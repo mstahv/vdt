@@ -27,9 +27,13 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Stack;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Service for resolving Maven dependencies using Maven Resolver API.
@@ -107,9 +111,63 @@ public class MavenDependencyService {
     }
 
     /**
-     * Parses a pom.xml file and resolves its dependencies.
+     * Parses a pom.xml file and resolves its dependencies using mvn dependency:tree -Dverbose.
+     * This ensures we get exactly the same output as Maven including omitted dependencies.
      */
     public DependencyNode resolveDependenciesFromPom(String pomContent) throws Exception {
+        return resolveDependenciesFromPomViaCommand(pomContent);
+    }
+
+    /**
+     * Parses pom.xml using mvn dependency:tree command to get verbose dependency information.
+     */
+    private DependencyNode resolveDependenciesFromPomViaCommand(String pomContent) throws Exception {
+        // Create temporary directory for pom.xml
+        File tempDir = Files.createTempDirectory("maven-dep-analysis").toFile();
+        File pomFile = new File(tempDir, "pom.xml");
+
+        try {
+            // Write POM content to temporary file
+            Files.write(pomFile.toPath(), pomContent.getBytes(StandardCharsets.UTF_8));
+
+            // Run mvn dependency:tree -Dverbose=true
+            ProcessBuilder pb = new ProcessBuilder(
+                "mvn", "dependency:tree", "-Dverbose=true"
+            );
+            pb.directory(tempDir);
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+
+            // Read output
+            StringBuilder output = new StringBuilder();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                throw new Exception("Maven command failed with exit code " + exitCode + ":\n" + output.toString());
+            }
+
+            // Parse the dependency tree from Maven output
+            return parseMavenTreeOutput(output.toString());
+
+        } finally {
+            // Clean up temporary files
+            pomFile.delete();
+            tempDir.delete();
+        }
+    }
+
+    /**
+     * Original method that parses pom.xml using Maven APIs (without omitted dependencies).
+     */
+    private DependencyNode resolveDependenciesFromPomOld(String pomContent) throws Exception {
         try {
             // Create a ModelResolver for resolving parent POMs
             ModelResolver modelResolver = new SimpleModelResolver(repositorySystem, session, repositories);
@@ -267,6 +325,198 @@ public class MavenDependencyService {
             // Recursively process children
             propagateManagedVersionNotes(child, managedVersions);
         }
+    }
+
+    /**
+     * Parses Maven dependency:tree output and builds DependencyNode tree.
+     */
+    private DependencyNode parseMavenTreeOutput(String output) throws Exception {
+        String[] lines = output.split("\n");
+
+        // Find the start of the dependency tree
+        int startLine = -1;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            // Look for the root dependency line (doesn't start with [INFO] prefix after the root)
+            if (line.contains(":jar:") || line.contains(":war:") || line.contains(":pom:")) {
+                // Skip [INFO] lines, find actual tree start
+                if (!line.trim().startsWith("[INFO]") || line.contains("---")) {
+                    continue;
+                }
+                // This is likely the root
+                String cleaned = line.substring(line.indexOf("]") + 1).trim();
+                if (cleaned.matches(".*:.*:.*:.*")) {
+                    startLine = i;
+                    break;
+                }
+            }
+        }
+
+        if (startLine == -1) {
+            throw new Exception("Could not find dependency tree in Maven output");
+        }
+
+        // Parse root node
+        String rootLine = lines[startLine].substring(lines[startLine].indexOf("]") + 1).trim();
+        DependencyNode root = parseTreeLine(rootLine, 0);
+
+        // Parse children using stack to track hierarchy
+        Stack<DependencyNode> nodeStack = new Stack<>();
+        Stack<Integer> depthStack = new Stack<>();
+        nodeStack.push(root);
+        depthStack.push(0);
+
+        for (int i = startLine + 1; i < lines.length; i++) {
+            String line = lines[i];
+
+            // Skip non-dependency lines
+            if (!line.contains("[INFO]") || !line.contains(":")) {
+                continue;
+            }
+
+            // Check if this is end of tree
+            if (line.contains("---") || line.contains("BUILD")) {
+                break;
+            }
+
+            // Extract the dependency line after [INFO]
+            int infoEnd = line.indexOf("]");
+            if (infoEnd == -1) continue;
+
+            String depLine = line.substring(infoEnd + 1);
+
+            // Calculate depth from tree characters (+-, |, \-, spaces)
+            int depth = calculateDepth(depLine);
+
+            // Clean the line (remove tree characters)
+            String cleanedLine = depLine.replaceFirst("^[\\s|+\\\\-]+", "").trim();
+
+            if (cleanedLine.isEmpty() || !cleanedLine.contains(":")) {
+                continue;
+            }
+
+            // Parse the dependency
+            DependencyNode node = parseTreeLine(cleanedLine, depth);
+
+            // Pop stack until we find the parent
+            while (!depthStack.isEmpty() && depthStack.peek() >= depth) {
+                nodeStack.pop();
+                depthStack.pop();
+            }
+
+            // Add as child to current parent
+            if (!nodeStack.isEmpty()) {
+                nodeStack.peek().addChild(node);
+                nodeStack.push(node);
+                depthStack.push(depth);
+            }
+        }
+
+        return root;
+    }
+
+    /**
+     * Calculates tree depth from indentation characters.
+     */
+    private int calculateDepth(String line) {
+        int depth = 0;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '+' || c == '\\' || c == '-') {
+                depth++;
+                break;
+            } else if (c == '|') {
+                depth++;
+            } else if (c != ' ') {
+                break;
+            }
+        }
+        return depth;
+    }
+
+    /**
+     * Parses a single dependency line from Maven tree output.
+     * Format: (groupId:artifactId:packaging:version:scope - annotations...) or groupId:artifactId:packaging:version:scope
+     */
+    private DependencyNode parseTreeLine(String line, int depth) {
+        // Check if line has parentheses (contains annotations)
+        boolean hasParens = line.startsWith("(") && line.contains(")");
+        String content = hasParens ? line.substring(1, line.lastIndexOf(")")) : line.trim();
+
+        // Split coordinates from annotations (separated by " - ")
+        String coords;
+        String annotations = "";
+        int dashIdx = content.indexOf(" - ");
+        if (dashIdx > 0) {
+            coords = content.substring(0, dashIdx).trim();
+            annotations = content.substring(dashIdx + 3);
+        } else {
+            coords = content.trim();
+        }
+
+        // Parse coordinates: groupId:artifactId:packaging:version:scope
+        String[] parts = coords.split(":");
+        if (parts.length < 3) {
+            // Fallback for malformed line
+            return new DependencyNode("unknown", "unknown", "unknown");
+        }
+
+        String groupId = parts[0];
+        String artifactId = parts[1];
+        String version = parts.length > 3 ? parts[3] : "unknown";
+        String scope = parts.length > 4 ? parts[4] : "compile";
+
+        DependencyNode node = new DependencyNode(groupId, artifactId, version);
+        node.setScope(scope);
+
+        // Parse annotations
+        if (!annotations.isEmpty()) {
+            // Check for optional
+            if (annotations.contains("optional")) {
+                node.setOptional(true);
+            }
+
+            // Check for omitted
+            if (annotations.contains("omitted for")) {
+                node.setOmitted(true);
+                // Extract omission reason
+                Pattern omittedPattern = Pattern.compile("omitted for ([^;]+)");
+                Matcher matcher = omittedPattern.matcher(annotations);
+                if (matcher.find()) {
+                    node.setOmittedReason("omitted for " + matcher.group(1).trim());
+                }
+            }
+
+            // Check for version management notes
+            if (annotations.contains("version managed from")) {
+                Pattern versionPattern = Pattern.compile("version managed from ([^;]+)");
+                Matcher matcher = versionPattern.matcher(annotations);
+                if (matcher.find()) {
+                    String note = "version managed from " + matcher.group(1).trim();
+                    if (node.getNotes() != null && !node.getNotes().contains(note)) {
+                        node.setNotes(node.getNotes() + "; " + note);
+                    } else if (node.getNotes() == null) {
+                        node.setNotes(note);
+                    }
+                }
+            }
+
+            // Check for scope management
+            if (annotations.contains("scope managed from")) {
+                Pattern scopePattern = Pattern.compile("scope managed from ([^;]+)");
+                Matcher matcher = scopePattern.matcher(annotations);
+                if (matcher.find()) {
+                    String note = "scope managed from " + matcher.group(1).trim();
+                    if (node.getNotes() != null) {
+                        node.setNotes(node.getNotes() + "; " + note);
+                    } else {
+                        node.setNotes(note);
+                    }
+                }
+            }
+        }
+
+        return node;
     }
 
     /**
