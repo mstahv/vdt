@@ -17,6 +17,7 @@ public class DependencyNode {
     private boolean omitted;
     private String omittedReason;
     private List<DependencyNode> children = new ArrayList<>();
+    private DependencyNode parent;
 
     public DependencyNode(String groupId, String artifactId, String version) {
         this.groupId = groupId;
@@ -114,7 +115,16 @@ public class DependencyNode {
     }
 
     public void addChild(DependencyNode child) {
+        child.setParent(this);
         this.children.add(child);
+    }
+
+    public DependencyNode getParent() {
+        return parent;
+    }
+
+    public void setParent(DependencyNode parent) {
+        this.parent = parent;
     }
 
     public String getCoordinates() {

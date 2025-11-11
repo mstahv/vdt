@@ -4,6 +4,7 @@ import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.checkbox.Checkbox;
 import com.vaadin.flow.component.combobox.ComboBox;
+import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.H1;
 import com.vaadin.flow.component.html.Paragraph;
 import com.vaadin.flow.component.icon.VaadinIcon;
@@ -11,6 +12,7 @@ import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
+import com.vaadin.flow.component.shared.Tooltip;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.component.upload.Upload;
 import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
@@ -47,10 +49,10 @@ public class MainView extends VerticalLayout {
         this.dependencyService = dependencyService;
 
         VStyleUtil.inject("""
-        vaadin-checkbox label {
-            white-space: nowrap;
-        }
-        """);
+                vaadin-checkbox label {
+                    white-space: nowrap;
+                }
+                """);
 
         setSizeFull();
         setPadding(true);
@@ -73,6 +75,163 @@ public class MainView extends VerticalLayout {
                 summarySection
         );
         setFlexGrow(1, treeTable);
+    }
+
+    private void analyzeDependencies(String coordinates) {
+        try {
+            lastAnalyzedCoordinates = coordinates;
+            DependencyNode root = dependencyService.resolveDependencies(coordinates);
+            String projectInfo = coordinates;
+            displayDependencyTree(root, projectInfo);
+            showSuccess("Dependencies resolved successfully!");
+        } catch (Exception e) {
+            showError("Failed to resolve dependencies: " + e.getMessage());
+        }
+    }
+
+    private void analyzePomFile(String pomContent) {
+        try {
+            DependencyNode root = dependencyService.resolveDependenciesFromPom(pomContent);
+            // Build project info string
+            String projectInfo = root.getGroupId() + ":" + root.getArtifactId() + ":" + root.getVersion();
+            lastAnalyzedCoordinates = projectInfo;
+            displayDependencyTree(root, projectInfo);
+            showSuccess("POM file analyzed successfully!");
+        } catch (Exception e) {
+            showError("Failed to analyze POM file: " + e.getMessage());
+        }
+    }
+
+    private void displayDependencyTree(DependencyNode root, String projectInfo) {
+        this.rootNode = root;
+
+        // Hide input sections
+        coordinatesInputSection.setVisible(false);
+        pomUploadSection.setVisible(false);
+
+        // Update header to analysis mode
+        header.showAnalysisMode(projectInfo);
+
+        // Show filter bar and summary
+        filterBar.setVisible(true);
+        summarySection.setVisible(true);
+        summarySection.updateSummary(root);
+
+        // Display the tree
+        applyFilters();
+        treeTable.setVisible(true);
+    }
+
+    private void resetToInputMode() {
+        // Hide analysis components
+        treeTable.setVisible(false);
+        filterBar.setVisible(false);
+        summarySection.setVisible(false);
+
+        // Show input sections
+        coordinatesInputSection.setVisible(true);
+        coordinatesInputSection.setCoordinates(lastAnalyzedCoordinates);
+        pomUploadSection.setVisible(true);
+
+        // Update header to input mode
+        header.showInputMode();
+
+        // Clear state
+        rootNode = null;
+    }
+
+    private void applyFilters() {
+        if (rootNode == null) {
+            return;
+        }
+
+        String searchText = filterBar.searchField.getValue();
+        String scopeValue = filterBar.scopeFilter.getValue();
+        boolean showOptionals = filterBar.showOptionalsFilter.getValue();
+        boolean showOmitted = filterBar.showOmittedFilter.getValue();
+
+        // Update search highlighting
+        ((DependencyTreeTable) treeTable).updateSearchHighlight(searchText);
+
+        List<DependencyNode> filteredRoots = filterDependencyTree(
+                List.of(rootNode),
+                searchText,
+                scopeValue,
+                showOptionals,
+                showOmitted
+        );
+
+        treeTable.setRootItems(filteredRoots, node -> filterDependencyTree(
+                node.getChildren(),
+                searchText,
+                scopeValue,
+                showOptionals,
+                showOmitted
+        ));
+    }
+
+    private List<DependencyNode> filterDependencyTree(List<DependencyNode> nodes,
+                                                      String searchText,
+                                                      String scope,
+                                                      boolean showOptionals,
+                                                      boolean showOmitted) {
+        if (nodes == null) {
+            return new ArrayList<>();
+        }
+
+        return nodes.stream()
+                .filter(node -> matchesFilters(node, searchText, scope, showOptionals, showOmitted) ||
+                        hasMatchingChildren(node, searchText, scope, showOptionals, showOmitted))
+                .collect(Collectors.toList());
+    }
+
+    private boolean matchesFilters(DependencyNode node, String searchText, String scope, boolean showOptionals, boolean showOmitted) {
+        // Text filter
+        if (searchText != null && !searchText.trim().isEmpty()) {
+            String lowerSearch = searchText.toLowerCase();
+            if (!node.getCoordinates().toLowerCase().contains(lowerSearch)) {
+                return false;
+            }
+        }
+
+        // Scope filter
+        if (!"All".equals(scope) && scope != null) {
+            if (!scope.equals(node.getScope())) {
+                return false;
+            }
+        }
+
+        // Optional filter - hide optional dependencies by default
+        if (!showOptionals && node.isOptional()) {
+            return false;
+        }
+
+        // Omitted filter - hide omitted dependencies by default
+        if (!showOmitted && node.isOmitted()) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean hasMatchingChildren(DependencyNode node, String searchText, String scope, boolean showOptionals, boolean showOmitted) {
+        if (node.getChildren() == null || node.getChildren().isEmpty()) {
+            return false;
+        }
+
+        return node.getChildren().stream()
+                .anyMatch(child -> matchesFilters(child, searchText, scope, showOptionals, showOmitted) ||
+                        hasMatchingChildren(child, searchText, scope, showOptionals, showOmitted));
+    }
+
+    private void showSuccess(String message) {
+        Notification notification = Notification.show(message, 3000, Notification.Position.TOP_CENTER);
+        notification.addThemeVariants(NotificationVariant.LUMO_SUCCESS);
+    }
+
+    private void showError(String message) {
+        Notification notification = Notification.show(message, 5000, Notification.Position.TOP_CENTER);
+        notification.addThemeVariants(NotificationVariant.LUMO_ERROR);
     }
 
     class Header extends HorizontalLayout {
@@ -188,6 +347,7 @@ public class MainView extends VerticalLayout {
         final ScopeFilter scopeFilter;
         final ShowOptionalsCheckbox showOptionalsFilter;
         final ShowOmittedCheckbox showOmittedFilter;
+        final ShowSizesCheckbox showSizesFilter;
 
         FilterBar() {
             setAlignItems(Alignment.BASELINE);
@@ -201,16 +361,18 @@ public class MainView extends VerticalLayout {
             scopeFilter = new ScopeFilter();
             showOptionalsFilter = new ShowOptionalsCheckbox();
             showOmittedFilter = new ShowOmittedCheckbox();
+            showSizesFilter = new ShowSizesCheckbox();
 
             var resetButton = new VButton("Reset", e -> {
                 searchField.clear();
                 scopeFilter.setValue("All");
                 showOptionalsFilter.setValue(false);
                 showOmittedFilter.setValue(false);
+                showSizesFilter.setValue(false);
             });
             resetButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
 
-            add(searchField, scopeFilter, showOptionalsFilter, showOmittedFilter, resetButton);
+            add(searchField, scopeFilter, showOptionalsFilter, showOmittedFilter, showSizesFilter, resetButton);
             setFlexGrow(1, searchField);
         }
 
@@ -254,10 +416,26 @@ public class MainView extends VerticalLayout {
                 });
             }
         }
+
+        class ShowSizesCheckbox extends Checkbox {
+            ShowSizesCheckbox() {
+                super("Show sizes");
+                setValue(false);
+                addValueChangeListener(e -> {
+                    boolean show = e.getValue();
+                    ((DependencyTreeTable) treeTable).setSizeColumnVisible(show);
+                    summarySection.setShowSizes(show);
+                    if (show) {
+                        summarySection.updateSummary(rootNode);
+                    }
+                });
+            }
+        }
     }
 
     class SummarySection extends HorizontalLayout {
         private final Paragraph summaryText;
+        private boolean showSizes = false;
 
         SummarySection() {
             setWidthFull();
@@ -286,21 +464,57 @@ public class MainView extends VerticalLayout {
 
             StringBuilder summary = new StringBuilder();
             summary.append("Total: ").append(totalDeps).append(" dependencies");
-            summary.append(" | Compile: ").append(compileDeps);
-            summary.append(" | Runtime: ").append(runtimeDeps);
-            summary.append(" | Test: ").append(testDeps);
 
-            if (providedDeps > 0) {
-                summary.append(" | Provided: ").append(providedDeps);
+            if (showSizes) {
+                long compileSize = calculateSizeByScope(root, "compile");
+                long runtimeSize = calculateSizeByScope(root, "runtime");
+                long testSize = calculateSizeByScope(root, "test");
+
+                summary.append(" | Compile: ").append(compileDeps)
+                        .append(" (").append(MavenDependencyService.formatSize(compileSize)).append(")");
+                summary.append(" | Runtime: ").append(runtimeDeps)
+                        .append(" (").append(MavenDependencyService.formatSize(runtimeSize)).append(")");
+                summary.append(" | Test: ").append(testDeps)
+                        .append(" (").append(MavenDependencyService.formatSize(testSize)).append(")");
+
+                if (providedDeps > 0) {
+                    long providedSize = calculateSizeByScope(root, "provided");
+                    summary.append(" | Provided: ").append(providedDeps)
+                            .append(" (").append(MavenDependencyService.formatSize(providedSize)).append(")");
+                }
+                if (systemDeps > 0) {
+                    long systemSize = calculateSizeByScope(root, "system");
+                    summary.append(" | System: ").append(systemDeps)
+                            .append(" (").append(MavenDependencyService.formatSize(systemSize)).append(")");
+                }
+            } else {
+                summary.append(" | Compile: ").append(compileDeps);
+                summary.append(" | Runtime: ").append(runtimeDeps);
+                summary.append(" | Test: ").append(testDeps);
+
+                if (providedDeps > 0) {
+                    summary.append(" | Provided: ").append(providedDeps);
+                }
+                if (systemDeps > 0) {
+                    summary.append(" | System: ").append(systemDeps);
+                }
             }
-            if (systemDeps > 0) {
-                summary.append(" | System: ").append(systemDeps);
-            }
+
             if (optionalDeps > 0) {
                 summary.append(" | Optional: ").append(optionalDeps);
             }
 
+            // Add total size information if enabled
+            if (showSizes) {
+                long totalSize = dependencyService.calculateTotalSize(root);
+                summary.append(" | Total size: ").append(MavenDependencyService.formatSize(totalSize));
+            }
+
             summaryText.setText(summary.toString());
+        }
+
+        void setShowSizes(boolean show) {
+            this.showSizes = show;
         }
 
         private int countAllDependencies(DependencyNode node) {
@@ -339,17 +553,71 @@ public class MainView extends VerticalLayout {
             }
             return count;
         }
+
+        private long calculateSizeByScope(DependencyNode node, String scope) {
+            long size = 0;
+            if (node.getChildren() != null) {
+                for (DependencyNode child : node.getChildren()) {
+                    // Skip omitted dependencies
+                    if (child.isOmitted()) {
+                        continue;
+                    }
+
+                    // Add size if scope matches
+                    if (scope.equals(child.getScope())) {
+                        size += dependencyService.getArtifactSize(child.getGroupId(), child.getArtifactId(), child.getVersion());
+                    }
+
+                    // Recursively process children
+                    size += calculateSizeByScope(child, scope);
+                }
+            }
+            return size;
+        }
     }
 
     class DependencyTreeTable extends TreeTable<DependencyNode> {
-        private String currentSearchText = "";
         private final com.vaadin.flow.component.grid.Grid.Column<DependencyNode> optionalColumn;
         private final com.vaadin.flow.component.grid.Grid.Column<DependencyNode> omittedColumn;
+        private final com.vaadin.flow.component.grid.Grid.Column<DependencyNode> sizeColumn;
+        private String currentSearchText = "";
 
         DependencyTreeTable() {
             setSizeFull();
-            addHierarchyColumn(DependencyNode::getCoordinates).setHeader("Dependency");
+            var hierarchyColumn = addHierarchyComponentColumn(node -> {
+                Div div = new Div();
+                div.setText(node.getCoordinates());
+                div.getStyle().set("text-overflow", "ellipsis")
+                        .setOverflow(Style.Overflow.HIDDEN)
+                        .setWhiteSpace(Style.WhiteSpace.NOWRAP);
+
+                // Build tooltip content with markdown
+                StringBuilder tooltipContent = new StringBuilder();
+                tooltipContent.append("**").append(node.getCoordinates()).append("**\n\n");
+
+                if (node.getParent() != null && node.getParent().getParent() != null) {
+                    // Parent exists and is not the root node
+                    tooltipContent.append("_Brought in by:_\n");
+                    tooltipContent.append("`").append(node.getParent().getCoordinates()).append("`");
+                }
+
+                Tooltip.forComponent(div).setMarkdown(tooltipContent.toString());
+
+                return div;
+            });
+
             addColumn(DependencyNode::getScope).setHeader("Scope").setAutoWidth(true).setFlexGrow(0);
+            sizeColumn = addColumn(node -> {
+                long directSize = dependencyService.getArtifactSize(node.getGroupId(), node.getArtifactId(), node.getVersion());
+                long totalSize = dependencyService.calculateTotalSize(node);
+                if (directSize == 0 && totalSize == 0) {
+                    return "-";
+                }
+                String direct = MavenDependencyService.formatSize(directSize);
+                String total = MavenDependencyService.formatSize(totalSize);
+                return direct.equals(total) ? direct : direct + " (" + total + ")";
+            }).setHeader("Size (Total)").setWidth("150px").setFlexGrow(0);
+            sizeColumn.setVisible(false); // Hidden by default
             optionalColumn = addColumn(node -> node.isOptional() ? "Yes" : "").setHeader("Optional").setWidth("100px").setFlexGrow(0);
             optionalColumn.setVisible(false); // Hidden by default
             omittedColumn = addColumn(node -> node.getOmittedReason() != null ? node.getOmittedReason() : "").setHeader("Omitted").setAutoWidth(true);
@@ -406,162 +674,9 @@ public class MainView extends VerticalLayout {
         void setOmittedColumnVisible(boolean visible) {
             omittedColumn.setVisible(visible);
         }
-    }
 
-    private void analyzeDependencies(String coordinates) {
-        try {
-            lastAnalyzedCoordinates = coordinates;
-            DependencyNode root = dependencyService.resolveDependencies(coordinates);
-            String projectInfo = coordinates;
-            displayDependencyTree(root, projectInfo);
-            showSuccess("Dependencies resolved successfully!");
-        } catch (Exception e) {
-            showError("Failed to resolve dependencies: " + e.getMessage());
+        void setSizeColumnVisible(boolean visible) {
+            sizeColumn.setVisible(visible);
         }
-    }
-
-    private void analyzePomFile(String pomContent) {
-        try {
-            DependencyNode root = dependencyService.resolveDependenciesFromPom(pomContent);
-            // Build project info string
-            String projectInfo = root.getGroupId() + ":" + root.getArtifactId() + ":" + root.getVersion();
-            lastAnalyzedCoordinates = projectInfo;
-            displayDependencyTree(root, projectInfo);
-            showSuccess("POM file analyzed successfully!");
-        } catch (Exception e) {
-            showError("Failed to analyze POM file: " + e.getMessage());
-        }
-    }
-
-    private void displayDependencyTree(DependencyNode root, String projectInfo) {
-        this.rootNode = root;
-
-        // Hide input sections
-        coordinatesInputSection.setVisible(false);
-        pomUploadSection.setVisible(false);
-
-        // Update header to analysis mode
-        header.showAnalysisMode(projectInfo);
-
-        // Show filter bar and summary
-        filterBar.setVisible(true);
-        summarySection.setVisible(true);
-        summarySection.updateSummary(root);
-
-        // Display the tree
-        applyFilters();
-        treeTable.setVisible(true);
-    }
-
-    private void resetToInputMode() {
-        // Hide analysis components
-        treeTable.setVisible(false);
-        filterBar.setVisible(false);
-        summarySection.setVisible(false);
-
-        // Show input sections
-        coordinatesInputSection.setVisible(true);
-        coordinatesInputSection.setCoordinates(lastAnalyzedCoordinates);
-        pomUploadSection.setVisible(true);
-
-        // Update header to input mode
-        header.showInputMode();
-
-        // Clear state
-        rootNode = null;
-    }
-
-    private void applyFilters() {
-        if (rootNode == null) {
-            return;
-        }
-
-        String searchText = filterBar.searchField.getValue();
-        String scopeValue = filterBar.scopeFilter.getValue();
-        boolean showOptionals = filterBar.showOptionalsFilter.getValue();
-        boolean showOmitted = filterBar.showOmittedFilter.getValue();
-
-        // Update search highlighting
-        ((DependencyTreeTable) treeTable).updateSearchHighlight(searchText);
-
-        List<DependencyNode> filteredRoots = filterDependencyTree(
-                List.of(rootNode),
-                searchText,
-                scopeValue,
-                showOptionals,
-                showOmitted
-        );
-
-        treeTable.setRootItems(filteredRoots, node -> filterDependencyTree(
-                node.getChildren(),
-                searchText,
-                scopeValue,
-                showOptionals,
-                showOmitted
-        ));
-    }
-
-    private List<DependencyNode> filterDependencyTree(List<DependencyNode> nodes,
-                                                       String searchText,
-                                                       String scope,
-                                                       boolean showOptionals,
-                                                       boolean showOmitted) {
-        if (nodes == null) {
-            return new ArrayList<>();
-        }
-
-        return nodes.stream()
-                .filter(node -> matchesFilters(node, searchText, scope, showOptionals, showOmitted) ||
-                               hasMatchingChildren(node, searchText, scope, showOptionals, showOmitted))
-                .collect(Collectors.toList());
-    }
-
-    private boolean matchesFilters(DependencyNode node, String searchText, String scope, boolean showOptionals, boolean showOmitted) {
-        // Text filter
-        if (searchText != null && !searchText.trim().isEmpty()) {
-            String lowerSearch = searchText.toLowerCase();
-            if (!node.getCoordinates().toLowerCase().contains(lowerSearch)) {
-                return false;
-            }
-        }
-
-        // Scope filter
-        if (!"All".equals(scope) && scope != null) {
-            if (!scope.equals(node.getScope())) {
-                return false;
-            }
-        }
-
-        // Optional filter - hide optional dependencies by default
-        if (!showOptionals && node.isOptional()) {
-            return false;
-        }
-
-        // Omitted filter - hide omitted dependencies by default
-        if (!showOmitted && node.isOmitted()) {
-            return false;
-        }
-
-        return true;
-    }
-
-    private boolean hasMatchingChildren(DependencyNode node, String searchText, String scope, boolean showOptionals, boolean showOmitted) {
-        if (node.getChildren() == null || node.getChildren().isEmpty()) {
-            return false;
-        }
-
-        return node.getChildren().stream()
-                .anyMatch(child -> matchesFilters(child, searchText, scope, showOptionals, showOmitted) ||
-                                  hasMatchingChildren(child, searchText, scope, showOptionals, showOmitted));
-    }
-
-    private void showSuccess(String message) {
-        Notification notification = Notification.show(message, 3000, Notification.Position.TOP_CENTER);
-        notification.addThemeVariants(NotificationVariant.LUMO_SUCCESS);
-    }
-
-    private void showError(String message) {
-        Notification notification = Notification.show(message, 5000, Notification.Position.TOP_CENTER);
-        notification.addThemeVariants(NotificationVariant.LUMO_ERROR);
     }
 }

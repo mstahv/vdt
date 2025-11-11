@@ -45,6 +45,9 @@ public class MavenDependencyService {
     private final DefaultRepositorySystemSession session;
     private final List<RemoteRepository> repositories;
 
+    // Cache for artifact sizes (groupId:artifactId:version -> size in bytes)
+    private final java.util.Map<String, Long> sizeCache = new java.util.concurrent.ConcurrentHashMap<>();
+
     public MavenDependencyService() {
         // Initialize Maven Resolver components
         DefaultServiceLocator locator = MavenRepositorySystemUtils.newServiceLocator();
@@ -248,6 +251,7 @@ public class MavenDependencyService {
             throw new Exception("Failed to parse POM file: " + e.getMessage(), e);
         }
     }
+
 
     /**
      * Builds a DependencyNode tree from the Aether dependency graph.
@@ -532,6 +536,97 @@ public class MavenDependencyService {
         }
 
         return node;
+    }
+
+    /**
+     * Gets the size of an artifact in bytes. Returns 0 if not a jar or if size cannot be determined.
+     * Checks local Maven repository first, then makes HTTP HEAD request to Maven Central if needed.
+     */
+    public long getArtifactSize(String groupId, String artifactId, String version) {
+        String cacheKey = groupId + ":" + artifactId + ":" + version;
+
+        // Check cache first
+        if (sizeCache.containsKey(cacheKey)) {
+            return sizeCache.get(cacheKey);
+        }
+
+        // Only calculate size for jar artifacts
+        long size = 0;
+
+        // First, try local Maven repository
+        String userHome = System.getProperty("user.home");
+        String localPath = userHome + "/.m2/repository/"
+                + groupId.replace('.', '/') + "/"
+                + artifactId + "/"
+                + version + "/"
+                + artifactId + "-" + version + ".jar";
+
+        File localFile = new File(localPath);
+        if (localFile.exists() && localFile.isFile()) {
+            size = localFile.length();
+        } else {
+            // Fall back to HTTP HEAD request to Maven Central
+            try {
+                String mavenCentralUrl = "https://repo.maven.apache.org/maven2/"
+                        + groupId.replace('.', '/') + "/"
+                        + artifactId + "/"
+                        + version + "/"
+                        + artifactId + "-" + version + ".jar";
+
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                        new java.net.URL(mavenCentralUrl).openConnection();
+                conn.setRequestMethod("HEAD");
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+
+                if (conn.getResponseCode() == 200) {
+                    size = conn.getContentLengthLong();
+                }
+                conn.disconnect();
+            } catch (Exception e) {
+                // If we can't get the size, just leave it as 0
+            }
+        }
+
+        // Cache the result
+        sizeCache.put(cacheKey, size);
+        return size;
+    }
+
+    /**
+     * Formats a size in bytes to a human-readable string (bytes, KB, MB, GB).
+     */
+    public static String formatSize(long bytes) {
+        if (bytes == 0) {
+            return "-";
+        } else if (bytes < 1024) {
+            return bytes + " B";
+        } else if (bytes < 1024 * 1024) {
+            return String.format("%.1f KB", bytes / 1024.0);
+        } else if (bytes < 1024 * 1024 * 1024) {
+            return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+        } else {
+            return String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+        }
+    }
+
+    /**
+     * Calculates the total size of a dependency and all its transitive dependencies.
+     * Skips omitted dependencies as they are not actually included in the project.
+     */
+    public long calculateTotalSize(DependencyNode node) {
+        long total = getArtifactSize(node.getGroupId(), node.getArtifactId(), node.getVersion());
+
+        if (node.getChildren() != null) {
+            for (DependencyNode child : node.getChildren()) {
+                // Skip omitted dependencies as they are not actually included
+                if (!child.isOmitted()) {
+                    total += calculateTotalSize(child);
+                }
+            }
+        }
+
+        return total;
     }
 
     /**
