@@ -494,11 +494,11 @@ public class MavenDependencyService {
             // Check for omitted
             if (annotations.contains("omitted for")) {
                 node.setOmitted(true);
-                // Extract omission reason
+                // Extract omission reason (without "omitted for" prefix since column header already says "Omitted")
                 Pattern omittedPattern = Pattern.compile("omitted for ([^;]+)");
                 Matcher matcher = omittedPattern.matcher(annotations);
                 if (matcher.find()) {
-                    node.setOmittedReason("omitted for " + matcher.group(1).trim());
+                    node.setOmittedReason(matcher.group(1).trim());
                 }
             }
 
