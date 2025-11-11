@@ -147,9 +147,9 @@ public class MainView extends VerticalLayout {
 
             try {
                 String pomContent = Files.readString(Path.of("./pom.xml"));
-                add(new VButton("Analyze this project", e -> analyzePomFile(pomContent)));
+                add(new VButton("Analyze this project (example)", e -> analyzePomFile(pomContent)));
             } catch (IOException e) {
-                // No project pom.xml available
+                // No project pom.xml available, probably a deployed version.
             }
         }
 
@@ -332,6 +332,7 @@ public class MainView extends VerticalLayout {
             addHierarchyColumn(DependencyNode::getCoordinates).setHeader("Dependency");
             addColumn(DependencyNode::getScope).setHeader("Scope").setAutoWidth(true).setFlexGrow(0);
             addColumn(node -> node.isOptional() ? "Yes" : "No").setHeader("Optional").setWidth("100px").setFlexGrow(0);
+            addColumn(node -> node.getNotes() != null ? node.getNotes() : "").setHeader("Notes").setAutoWidth(true);
             getColumns().forEach(c -> c.setResizable(true));
             setVisible(false);
 

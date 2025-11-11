@@ -132,22 +132,45 @@ public class MavenDependencyService {
                     model.getVersion() != null ? model.getVersion() : model.getParent().getVersion()
             );
 
+            // Build a map of managed dependencies
+            java.util.Map<String, String> managedVersions = new java.util.HashMap<>();
+            if (model.getDependencyManagement() != null && model.getDependencyManagement().getDependencies() != null) {
+                for (org.apache.maven.model.Dependency managed : model.getDependencyManagement().getDependencies()) {
+                    String key = managed.getGroupId() + ":" + managed.getArtifactId();
+                    managedVersions.put(key, managed.getVersion());
+                }
+            }
+
             // Resolve each dependency
             for (org.apache.maven.model.Dependency dep : model.getDependencies()) {
                 try {
                     String scope = dep.getScope() != null ? dep.getScope() : "compile";
+                    String version = dep.getVersion();
+
+                    // Check if version comes from dependency management
+                    String key = dep.getGroupId() + ":" + dep.getArtifactId();
+                    String managedVersion = managedVersions.get(key);
+
                     DependencyNode depNode = resolveDependencies(
                             dep.getGroupId(),
                             dep.getArtifactId(),
-                            dep.getVersion(),
+                            version != null ? version : managedVersion,
                             scope
                     );
                     depNode.setOptional("true".equals(dep.getOptional()));
+
+                    // Add note if version is managed
+                    if (version == null && managedVersion != null) {
+                        depNode.setNotes("version managed from " + managedVersion);
+                    }
 
                     // Propagate scope to transitive dependencies for non-compile scopes
                     if (!"compile".equals(scope)) {
                         propagateScope(depNode, scope);
                     }
+
+                    // Propagate managed version notes to children
+                    propagateManagedVersionNotes(depNode, managedVersions);
 
                     root.addChild(depNode);
                 } catch (Exception e) {
@@ -186,6 +209,8 @@ public class MavenDependencyService {
             depNode.setOptional(dep.isOptional());
         }
 
+        // Notes from Maven Resolver data will be added later via propagateManagedVersionNotes
+
         // Recursively add children
         for (org.eclipse.aether.graph.DependencyNode child : node.getChildren()) {
             depNode.addChild(buildDependencyTree(child));
@@ -214,6 +239,33 @@ public class MavenDependencyService {
                     propagateScope(child, scope);
                 }
             }
+        }
+    }
+
+    /**
+     * Propagates managed version notes to transitive dependencies.
+     */
+    private void propagateManagedVersionNotes(DependencyNode node, java.util.Map<String, String> managedVersions) {
+        if (node.getChildren() == null) {
+            return;
+        }
+
+        for (DependencyNode child : node.getChildren()) {
+            String key = child.getGroupId() + ":" + child.getArtifactId();
+            String managedVersion = managedVersions.get(key);
+
+            if (managedVersion != null && !managedVersion.equals(child.getVersion())) {
+                // Add note about version management
+                String note = "version managed from " + managedVersion;
+                if (child.getNotes() != null) {
+                    child.setNotes(child.getNotes() + "; " + note);
+                } else {
+                    child.setNotes(note);
+                }
+            }
+
+            // Recursively process children
+            propagateManagedVersionNotes(child, managedVersions);
         }
     }
 

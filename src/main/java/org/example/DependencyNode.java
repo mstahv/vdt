@@ -13,6 +13,7 @@ public class DependencyNode {
     private String scope;
     private String type;
     private boolean optional;
+    private String notes;
     private List<DependencyNode> children = new ArrayList<>();
 
     public DependencyNode(String groupId, String artifactId, String version) {
@@ -76,6 +77,14 @@ public class DependencyNode {
 
     public void setOptional(boolean optional) {
         this.optional = optional;
+    }
+
+    public String getNotes() {
+        return notes;
+    }
+
+    public void setNotes(String notes) {
+        this.notes = notes;
     }
 
     public List<DependencyNode> getChildren() {
