@@ -237,7 +237,10 @@ public class MainView extends VerticalLayout {
             ShowOptionalsCheckbox() {
                 super("Show optionals");
                 setValue(false);
-                addValueChangeListener(e -> applyFilters());
+                addValueChangeListener(e -> {
+                    ((DependencyTreeTable) treeTable).setOptionalColumnVisible(e.getValue());
+                    applyFilters();
+                });
             }
         }
 
@@ -245,7 +248,10 @@ public class MainView extends VerticalLayout {
             ShowOmittedCheckbox() {
                 super("Show omitted");
                 setValue(false);
-                addValueChangeListener(e -> applyFilters());
+                addValueChangeListener(e -> {
+                    ((DependencyTreeTable) treeTable).setOmittedColumnVisible(e.getValue());
+                    applyFilters();
+                });
             }
         }
     }
@@ -337,13 +343,17 @@ public class MainView extends VerticalLayout {
 
     class DependencyTreeTable extends TreeTable<DependencyNode> {
         private String currentSearchText = "";
+        private final com.vaadin.flow.component.grid.Grid.Column<DependencyNode> optionalColumn;
+        private final com.vaadin.flow.component.grid.Grid.Column<DependencyNode> omittedColumn;
 
         DependencyTreeTable() {
             setSizeFull();
             addHierarchyColumn(DependencyNode::getCoordinates).setHeader("Dependency");
             addColumn(DependencyNode::getScope).setHeader("Scope").setAutoWidth(true).setFlexGrow(0);
-            addColumn(node -> node.isOptional() ? "Yes" : "No").setHeader("Optional").setWidth("100px").setFlexGrow(0);
-            addColumn(node -> node.getOmittedReason() != null ? node.getOmittedReason() : "").setHeader("Omitted").setAutoWidth(true);
+            optionalColumn = addColumn(node -> node.isOptional() ? "Yes" : "").setHeader("Optional").setWidth("100px").setFlexGrow(0);
+            optionalColumn.setVisible(false); // Hidden by default
+            omittedColumn = addColumn(node -> node.getOmittedReason() != null ? node.getOmittedReason() : "").setHeader("Omitted").setAutoWidth(true);
+            omittedColumn.setVisible(false); // Hidden by default
             addColumn(node -> node.getNotes() != null ? node.getNotes() : "").setHeader("Notes").setAutoWidth(true);
             getColumns().forEach(c -> c.setResizable(true));
             setVisible(false);
@@ -387,6 +397,14 @@ public class MainView extends VerticalLayout {
         void updateSearchHighlight(String searchText) {
             this.currentSearchText = searchText;
             getDataProvider().refreshAll();
+        }
+
+        void setOptionalColumnVisible(boolean visible) {
+            optionalColumn.setVisible(visible);
+        }
+
+        void setOmittedColumnVisible(boolean visible) {
+            omittedColumn.setVisible(visible);
         }
     }
 
