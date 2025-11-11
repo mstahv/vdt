@@ -436,22 +436,37 @@ public class MavenDependencyService {
 
     /**
      * Parses a single dependency line from Maven tree output.
-     * Format: (groupId:artifactId:packaging:version:scope - annotations...) or groupId:artifactId:packaging:version:scope
+     * Two formats:
+     * 1. groupId:artifactId:packaging:version:scope (annotation text)
+     * 2. (groupId:artifactId:packaging:version:scope - omitted for ...)
      */
     private DependencyNode parseTreeLine(String line, int depth) {
-        // Check if line has parentheses (contains annotations)
-        boolean hasParens = line.startsWith("(") && line.contains(")");
-        String content = hasParens ? line.substring(1, line.lastIndexOf(")")) : line.trim();
-
-        // Split coordinates from annotations (separated by " - ")
         String coords;
         String annotations = "";
-        int dashIdx = content.indexOf(" - ");
-        if (dashIdx > 0) {
-            coords = content.substring(0, dashIdx).trim();
-            annotations = content.substring(dashIdx + 3);
+
+        // Check format: does line start with '(' (omitted format)?
+        if (line.startsWith("(") && line.contains(")")) {
+            // Format: (coords - annotations)
+            String content = line.substring(1, line.lastIndexOf(")"));
+            int dashIdx = content.indexOf(" - ");
+            if (dashIdx > 0) {
+                coords = content.substring(0, dashIdx).trim();
+                annotations = content.substring(dashIdx + 3).trim();
+            } else {
+                coords = content.trim();
+            }
         } else {
-            coords = content.trim();
+            // Format: coords (annotations)
+            int parenIdx = line.indexOf(" (");
+            if (parenIdx > 0) {
+                coords = line.substring(0, parenIdx).trim();
+                int closeIdx = line.lastIndexOf(")");
+                if (closeIdx > parenIdx) {
+                    annotations = line.substring(parenIdx + 2, closeIdx).trim();
+                }
+            } else {
+                coords = line.trim();
+            }
         }
 
         // Parse coordinates: groupId:artifactId:packaging:version:scope
