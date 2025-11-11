@@ -1,17 +1,21 @@
 package org.example;
 
+import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.checkbox.Checkbox;
 import com.vaadin.flow.component.combobox.ComboBox;
+import com.vaadin.flow.component.dialog.Dialog;
 import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.H1;
 import com.vaadin.flow.component.html.Paragraph;
+import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.icon.VaadinIcon;
 import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
+import com.vaadin.flow.component.progressbar.ProgressBar;
 import com.vaadin.flow.component.shared.Tooltip;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.component.upload.Upload;
@@ -77,29 +81,86 @@ public class MainView extends VerticalLayout {
         setFlexGrow(1, treeTable);
     }
 
+    private Dialog createLoadingDialog(String message) {
+        Dialog dialog = new Dialog();
+        dialog.setModal(true);
+        dialog.setCloseOnEsc(false);
+        dialog.setCloseOnOutsideClick(false);
+        dialog.setDraggable(false);
+
+        VerticalLayout layout = new VerticalLayout();
+        layout.setPadding(true);
+        layout.setSpacing(true);
+        layout.setAlignItems(Alignment.CENTER);
+
+        ProgressBar progressBar = new ProgressBar();
+        progressBar.setIndeterminate(true);
+        progressBar.setWidth("300px");
+
+        Span text = new Span(message);
+        text.getStyle().set("font-size", "var(--lumo-font-size-m)");
+
+        Span subText = new Span("This might take a while...");
+        subText.getStyle().set("font-size", "var(--lumo-font-size-s)")
+                         .set("color", "var(--lumo-secondary-text-color)");
+
+        layout.add(progressBar, text, subText);
+        dialog.add(layout);
+
+        return dialog;
+    }
+
     private void analyzeDependencies(String coordinates) {
-        try {
-            lastAnalyzedCoordinates = coordinates;
-            DependencyNode root = dependencyService.resolveDependencies(coordinates);
-            String projectInfo = coordinates;
-            displayDependencyTree(root, projectInfo);
-            showSuccess("Dependencies resolved successfully!");
-        } catch (Exception e) {
-            showError("Failed to resolve dependencies: " + e.getMessage());
-        }
+        Dialog loadingDialog = createLoadingDialog("Resolving dependencies");
+        loadingDialog.open();
+
+        UI ui = UI.getCurrent();
+
+        new Thread(() -> {
+            try {
+                lastAnalyzedCoordinates = coordinates;
+                DependencyNode root = dependencyService.resolveDependencies(coordinates);
+                String projectInfo = coordinates;
+
+                ui.access(() -> {
+                    loadingDialog.close();
+                    displayDependencyTree(root, projectInfo);
+                    showSuccess("Dependencies resolved successfully!");
+                });
+            } catch (Exception e) {
+                ui.access(() -> {
+                    loadingDialog.close();
+                    showError("Failed to resolve dependencies: " + e.getMessage());
+                });
+            }
+        }).start();
     }
 
     private void analyzePomFile(String pomContent) {
-        try {
-            DependencyNode root = dependencyService.resolveDependenciesFromPom(pomContent);
-            // Build project info string
-            String projectInfo = root.getGroupId() + ":" + root.getArtifactId() + ":" + root.getVersion();
-            lastAnalyzedCoordinates = projectInfo;
-            displayDependencyTree(root, projectInfo);
-            showSuccess("POM file analyzed successfully!");
-        } catch (Exception e) {
-            showError("Failed to analyze POM file: " + e.getMessage());
-        }
+        Dialog loadingDialog = createLoadingDialog("Analyzing POM file");
+        loadingDialog.open();
+
+        UI ui = UI.getCurrent();
+
+        new Thread(() -> {
+            try {
+                DependencyNode root = dependencyService.resolveDependenciesFromPom(pomContent);
+                // Build project info string
+                String projectInfo = root.getGroupId() + ":" + root.getArtifactId() + ":" + root.getVersion();
+
+                ui.access(() -> {
+                    lastAnalyzedCoordinates = projectInfo;
+                    loadingDialog.close();
+                    displayDependencyTree(root, projectInfo);
+                    showSuccess("POM file analyzed successfully!");
+                });
+            } catch (Exception e) {
+                ui.access(() -> {
+                    loadingDialog.close();
+                    showError("Failed to analyze POM file: " + e.getMessage());
+                });
+            }
+        }).start();
     }
 
     private void displayDependencyTree(DependencyNode root, String projectInfo) {
@@ -425,7 +486,25 @@ public class MainView extends VerticalLayout {
                     boolean show = e.getValue();
                     ((DependencyTreeTable) treeTable).setSizeColumnVisible(show);
                     summarySection.setShowSizes(show);
-                    if (show) {
+
+                    if (show && rootNode != null) {
+                        // Show loading dialog for size calculation
+                        Dialog loadingDialog = createLoadingDialog("Calculating dependency sizes");
+                        loadingDialog.open();
+
+                        UI ui = UI.getCurrent();
+
+                        new Thread(() -> {
+                            // Trigger size calculation by updating summary
+                            ui.access(() -> {
+                                summarySection.updateSummary(rootNode);
+                                // Refresh the grid to show sizes
+                                treeTable.getDataProvider().refreshAll();
+                                loadingDialog.close();
+                            });
+                        }).start();
+                    } else if (!show) {
+                        // Just update without loading dialog when hiding
                         summarySection.updateSummary(rootNode);
                     }
                 });
@@ -601,7 +680,9 @@ public class MainView extends VerticalLayout {
                     tooltipContent.append("`").append(node.getParent().getCoordinates()).append("`");
                 }
 
-                Tooltip.forComponent(div).setMarkdown(tooltipContent.toString());
+                Tooltip tooltip = Tooltip.forComponent(div);
+                tooltip.setMarkdown(tooltipContent.toString());
+                tooltip.setPosition(Tooltip.TooltipPosition.TOP_END);
 
                 return div;
             });
@@ -620,9 +701,10 @@ public class MainView extends VerticalLayout {
             sizeColumn.setVisible(false); // Hidden by default
             optionalColumn = addColumn(node -> node.isOptional() ? "Yes" : "").setHeader("Optional").setWidth("100px").setFlexGrow(0);
             optionalColumn.setVisible(false); // Hidden by default
-            omittedColumn = addColumn(node -> node.getOmittedReason() != null ? node.getOmittedReason() : "").setHeader("Omitted").setAutoWidth(true);
+            omittedColumn = addColumn(node -> node.getOmittedReason() != null ? node.getOmittedReason() : "").setHeader("Omitted")
+                    .setAutoWidth(true).setFlexGrow(0);
             omittedColumn.setVisible(false); // Hidden by default
-            addColumn(node -> node.getNotes() != null ? node.getNotes() : "").setHeader("Notes").setAutoWidth(true);
+            addColumn(node -> node.getNotes() != null ? node.getNotes() : "").setHeader("Notes").setAutoWidth(true).setFlexGrow(0);
             getColumns().forEach(c -> c.setResizable(true));
             setVisible(false);
 
