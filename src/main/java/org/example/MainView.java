@@ -6,6 +6,7 @@ import com.vaadin.flow.component.checkbox.Checkbox;
 import com.vaadin.flow.component.combobox.ComboBox;
 import com.vaadin.flow.component.html.H1;
 import com.vaadin.flow.component.html.Paragraph;
+import com.vaadin.flow.component.icon.VaadinIcon;
 import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
@@ -18,6 +19,7 @@ import com.vaadin.flow.dom.Style;
 import com.vaadin.flow.router.Route;
 import org.vaadin.firitin.components.TreeTable;
 import org.vaadin.firitin.components.button.VButton;
+import org.vaadin.firitin.util.VStyleUtil;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -43,6 +45,12 @@ public class MainView extends VerticalLayout {
 
     public MainView(MavenDependencyService dependencyService) {
         this.dependencyService = dependencyService;
+
+        VStyleUtil.inject("""
+        vaadin-checkbox label {
+            white-space: nowrap;
+        }
+        """);
 
         setSizeFull();
         setPadding(true);
@@ -84,20 +92,11 @@ public class MainView extends VerticalLayout {
             description = new Paragraph(
                     "Analyze Maven dependencies by uploading a pom.xml file or entering Maven coordinates."
             );
-            description.getStyle()
-                    .setColor("var(--lumo-secondary-text-color)")
-                    .setMargin("0")
-                    .setMarginLeft("var(--lumo-space-m)");
 
             projectInfo = new Paragraph();
-            projectInfo.getStyle()
-                    .setColor("var(--lumo-secondary-text-color)")
-                    .setMargin("0")
-                    .setMarginLeft("var(--lumo-space-m)")
-                    .setFontSize("var(--lumo-font-size-m)");
             projectInfo.setVisible(false);
 
-            newAnalysisButton = new VButton("New Analysis", e -> resetToInputMode());
+            newAnalysisButton = new VButton(VaadinIcon.REFRESH, "New Analysis...", e -> resetToInputMode());
             newAnalysisButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
             newAnalysisButton.setVisible(false);
 
