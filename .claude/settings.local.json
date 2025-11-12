@@ -6,7 +6,8 @@
       "Bash(cat:*)",
       "Bash(mvn test:*)",
       "WebFetch(domain:github.com)",
-      "Bash(mvn clean test:*)"
+      "Bash(mvn clean test:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "deny": [],
     "ask": []

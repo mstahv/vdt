@@ -1,9 +1,19 @@
 package org.example;
 
+import org.apache.maven.execution.DefaultMavenExecutionRequest;
+import org.apache.maven.execution.MavenExecutionRequest;
+import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.building.*;
 import org.apache.maven.model.resolution.ModelResolver;
+import org.apache.maven.project.MavenProject;
+import org.apache.maven.project.ProjectBuilder;
+import org.apache.maven.project.ProjectBuildingRequest;
+import org.apache.maven.project.ProjectBuildingResult;
 import org.apache.maven.repository.internal.MavenRepositorySystemUtils;
+import org.apache.maven.shared.dependency.graph.DependencyCollectorBuilder;
+import org.apache.maven.shared.dependency.graph.internal.DefaultDependencyCollectorBuilder;
+import org.codehaus.plexus.DefaultPlexusContainer;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.artifact.Artifact;
@@ -114,11 +124,195 @@ public class MavenDependencyService {
     }
 
     /**
-     * Parses a pom.xml file and resolves its dependencies using mvn dependency:tree -Dverbose.
-     * This ensures we get exactly the same output as Maven including omitted dependencies.
+     * Parses a pom.xml file and resolves its dependencies.
+     * Uses ProcessBuilder to run mvn dependency:tree for accurate verbose output.
      */
     public DependencyNode resolveDependenciesFromPom(String pomContent) throws Exception {
+        // Use ProcessBuilder method for now - it's proven to work correctly
+        // The in-JVM DependencyCollectorBuilder approach requires complex Plexus setup
         return resolveDependenciesFromPomViaCommand(pomContent);
+    }
+
+    /**
+     * Resolves dependencies from POM using DependencyCollectorBuilder (same as mvn dependency:tree -Dverbose).
+     * This uses Maven's internal API to capture all nodes including omitted ones.
+     */
+    private DependencyNode resolveDependenciesFromPomInJVM(String pomContent) throws Exception {
+        try {
+            // Initialize Plexus container for dependency injection
+            DefaultPlexusContainer container = new DefaultPlexusContainer();
+
+            try {
+                // Get ProjectBuilder from container
+                ProjectBuilder projectBuilder = container.lookup(ProjectBuilder.class);
+
+                // Create a temporary file for the POM
+                File tempPom = Files.createTempFile("pom", ".xml").toFile();
+                try {
+                    Files.write(tempPom.toPath(), pomContent.getBytes(StandardCharsets.UTF_8));
+
+                    // Build MavenProject from POM
+                    ProjectBuildingRequest buildingRequest = new org.apache.maven.project.DefaultProjectBuildingRequest();
+                    buildingRequest.setRepositorySession(session);
+                    buildingRequest.setRemoteRepositories(
+                        repositories.stream()
+                            .map(repo -> new org.apache.maven.artifact.repository.MavenArtifactRepository(
+                                repo.getId(),
+                                repo.getUrl(),
+                                new org.apache.maven.artifact.repository.layout.DefaultRepositoryLayout(),
+                                new org.apache.maven.artifact.repository.ArtifactRepositoryPolicy(),
+                                new org.apache.maven.artifact.repository.ArtifactRepositoryPolicy()
+                            ))
+                            .collect(java.util.stream.Collectors.toList())
+                    );
+                    buildingRequest.setProcessPlugins(false);
+                    buildingRequest.setResolveDependencies(false);
+                    buildingRequest.setSystemProperties(System.getProperties());
+
+                    ProjectBuildingResult projectBuildingResult = projectBuilder.build(tempPom, buildingRequest);
+                    MavenProject project = projectBuildingResult.getProject();
+
+                    // Create MavenSession
+                    MavenExecutionRequest executionRequest = new DefaultMavenExecutionRequest();
+                    executionRequest.setSystemProperties(System.getProperties());
+                    executionRequest.setUserProperties(new java.util.Properties());
+                    executionRequest.setLocalRepository(
+                        new org.apache.maven.artifact.repository.MavenArtifactRepository(
+                            "local",
+                            new File(System.getProperty("user.home"), ".m2/repository").toURI().toString(),
+                            new org.apache.maven.artifact.repository.layout.DefaultRepositoryLayout(),
+                            new org.apache.maven.artifact.repository.ArtifactRepositoryPolicy(),
+                            new org.apache.maven.artifact.repository.ArtifactRepositoryPolicy()
+                        )
+                    );
+
+                    // Use DependencyCollectorBuilder to get verbose dependency tree
+                    DependencyCollectorBuilder dependencyCollectorBuilder =
+                        new DefaultDependencyCollectorBuilder(repositorySystem);
+
+                    org.apache.maven.shared.dependency.graph.DependencyNode rootDepNode =
+                        dependencyCollectorBuilder.collectDependencyGraph(
+                            buildingRequest,
+                            null // filter - null means include all
+                        );
+
+                    // Convert to our DependencyNode format
+                    return convertFromMavenDependencyNode(rootDepNode);
+
+                } finally {
+                    tempPom.delete();
+                }
+            } finally {
+                container.dispose();
+            }
+        } catch (Exception e) {
+            throw new Exception("Failed to parse POM file using DependencyCollectorBuilder: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Converts from org.apache.maven.shared.dependency.graph.DependencyNode to our DependencyNode.
+     */
+    private DependencyNode convertFromMavenDependencyNode(org.apache.maven.shared.dependency.graph.DependencyNode mavenNode) {
+        org.apache.maven.artifact.Artifact artifact = mavenNode.getArtifact();
+
+        DependencyNode node = new DependencyNode(
+            artifact.getGroupId(),
+            artifact.getArtifactId(),
+            artifact.getVersion()
+        );
+
+        node.setScope(artifact.getScope() != null ? artifact.getScope() : "compile");
+        node.setOptional(artifact.isOptional());
+
+        // Check if this node represents an omitted dependency
+        if (mavenNode.getChildren().isEmpty() && mavenNode.getPremanagedVersion() == null) {
+            // This might be omitted - we can detect this by checking if it has no children
+            // but normally should have (this is a heuristic)
+        }
+
+        // Handle version management
+        String premanagedVersion = mavenNode.getPremanagedVersion();
+        if (premanagedVersion != null && !premanagedVersion.equals(artifact.getVersion())) {
+            node.setNotes("version managed from " + premanagedVersion);
+        }
+
+        // Handle scope management
+        String premanagedScope = mavenNode.getPremanagedScope();
+        if (premanagedScope != null && !premanagedScope.equals(artifact.getScope())) {
+            String note = "scope managed from " + premanagedScope;
+            if (node.getNotes() != null) {
+                node.setNotes(node.getNotes() + "; " + note);
+            } else {
+                node.setNotes(note);
+            }
+        }
+
+        // Process children recursively
+        for (org.apache.maven.shared.dependency.graph.DependencyNode child : mavenNode.getChildren()) {
+            node.addChild(convertFromMavenDependencyNode(child));
+        }
+
+        return node;
+    }
+
+    /**
+     * Builds a DependencyNode tree from Aether dependency graph with verbose mode.
+     * This tracks seen dependencies to mark duplicates and conflicts as omitted.
+     */
+    private DependencyNode buildVerboseDependencyTree(
+            org.eclipse.aether.graph.DependencyNode aetherNode,
+            java.util.Map<String, Integer> seenDependencies,
+            java.util.Map<String, String> managedVersions) {
+
+
+        org.eclipse.aether.graph.Dependency dep = aetherNode.getDependency();
+        Artifact artifact = dep != null ? dep.getArtifact() : aetherNode.getArtifact();
+
+        DependencyNode depNode = new DependencyNode(
+                artifact.getGroupId(),
+                artifact.getArtifactId(),
+                artifact.getVersion()
+        );
+
+        if (dep != null) {
+            depNode.setScope(dep.getScope());
+            depNode.setOptional(dep.isOptional());
+        }
+
+        // Check for version management
+        String key = artifact.getGroupId() + ":" + artifact.getArtifactId();
+        String managedVersion = managedVersions.get(key);
+        if (managedVersion != null && !managedVersion.equals(artifact.getVersion())) {
+            depNode.setNotes("version managed from " + managedVersion);
+        }
+
+        // Track this dependency for conflict detection
+        String depKey = artifact.getGroupId() + ":" + artifact.getArtifactId();
+        Integer previousVersion = seenDependencies.get(depKey);
+
+        // Check if this is a duplicate or conflict
+        if (previousVersion != null) {
+            // Mark as omitted with reason
+            depNode.setOmitted(true);
+            if (previousVersion != artifact.getVersion().hashCode()) {
+                depNode.setOmittedReason("conflict with " + artifact.getGroupId() + ":" +
+                    artifact.getArtifactId() + ":" + previousVersion);
+            } else {
+                depNode.setOmittedReason("duplicate");
+            }
+        } else {
+            seenDependencies.put(depKey, artifact.getVersion().hashCode());
+        }
+
+        // Recursively add children
+        for (org.eclipse.aether.graph.DependencyNode child : aetherNode.getChildren()) {
+            // Create a new scope for children to track their conflicts separately
+            java.util.Map<String, Integer> childSeen = new java.util.HashMap<>(seenDependencies);
+            depNode.addChild(buildVerboseDependencyTree(child, childSeen, managedVersions));
+        }
+
+        return depNode;
     }
 
     /**

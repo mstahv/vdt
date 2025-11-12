@@ -380,8 +380,6 @@ public class MainView extends VerticalLayout {
 
     class PomUploadSection extends Upload {
         PomUploadSection() {
-            MemoryBuffer buffer = new MemoryBuffer();
-            setReceiver(buffer);
             setAcceptedFileTypes(".xml", "text/xml", "application/xml");
             setMaxFiles(1);
             setMaxFileSize(5 * 1024 * 1024); // 5MB
@@ -391,14 +389,16 @@ public class MainView extends VerticalLayout {
                     .setBackground("var(--lumo-contrast-5pct)")
                     .setBorderRadius("var(--lumo-border-radius-m)");
 
-            addSucceededListener(event -> {
-                try {
-                    InputStream inputStream = buffer.getInputStream();
-                    String pomContent = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
-                    analyzePomFile(pomContent);
-                } catch (Exception e) {
-                    showError("Failed to read file: " + e.getMessage());
-                }
+            setUploadHandler(event -> {
+                InputStream inputStream = event.getInputStream();
+                String pomContent = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+                event.getUI().access(() -> {
+                    try {
+                        analyzePomFile(pomContent);
+                    } catch (Exception e) {
+                        showError("Failed to read file: " + e.getMessage());
+                    }
+                });
             });
         }
     }
