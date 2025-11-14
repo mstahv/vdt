@@ -1,5 +1,7 @@
-package org.example;
+package in.virit.vdt;
 
+import com.vaadin.flow.component.DetachEvent;
+import com.vaadin.flow.component.ModalityMode;
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
@@ -19,10 +21,10 @@ import com.vaadin.flow.component.progressbar.ProgressBar;
 import com.vaadin.flow.component.shared.Tooltip;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.component.upload.Upload;
-import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
 import com.vaadin.flow.data.value.ValueChangeMode;
 import com.vaadin.flow.dom.Style;
 import com.vaadin.flow.router.Route;
+import io.quarkus.runtime.Quarkus;
 import org.vaadin.firitin.components.TreeTable;
 import org.vaadin.firitin.components.button.VButton;
 import org.vaadin.firitin.util.VStyleUtil;
@@ -79,11 +81,22 @@ public class MainView extends VerticalLayout {
                 summarySection
         );
         setFlexGrow(1, treeTable);
+
+        Path pompath = Path.of("pom.xml");
+        if(Files.exists(pompath)) {
+            try {
+                String pom = Files.readString(pompath);
+                analyzePomFile(pom);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
     }
 
     private Dialog createLoadingDialog(String message) {
         Dialog dialog = new Dialog();
-        dialog.setModal(true);
+        dialog.setModality(ModalityMode.STRICT);
         dialog.setCloseOnEsc(false);
         dialog.setCloseOnOutsideClick(false);
         dialog.setDraggable(false);
@@ -102,7 +115,7 @@ public class MainView extends VerticalLayout {
 
         Span subText = new Span("This might take a while...");
         subText.getStyle().set("font-size", "var(--lumo-font-size-s)")
-                         .set("color", "var(--lumo-secondary-text-color)");
+                .set("color", "var(--lumo-secondary-text-color)");
 
         layout.add(progressBar, text, subText);
         dialog.add(layout);
@@ -759,6 +772,15 @@ public class MainView extends VerticalLayout {
 
         void setSizeColumnVisible(boolean visible) {
             sizeColumn.setVisible(visible);
+        }
+    }
+
+    @Override
+    protected void onDetach(DetachEvent detachEvent) {
+        super.onDetach(detachEvent);
+        if(dependencyService.isLocal()) {
+            System.out.println("Window closed, closing server...");
+            Quarkus.asyncExit();
         }
     }
 }

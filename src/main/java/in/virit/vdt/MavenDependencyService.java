@@ -1,23 +1,49 @@
-package org.example;
+package in.virit.vdt;
 
-import org.springframework.stereotype.Service;
+import com.vaadin.flow.server.ServiceInitEvent;
+import com.vaadin.open.Open;
+import io.quarkus.vertx.http.HttpServerStart;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.event.ObservesAsync;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Map;
 import java.util.Stack;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Service for resolving Maven dependencies using mvn dependency:tree command.
  */
-@Service
+@ApplicationScoped
 public class MavenDependencyService {
 
     // Cache for artifact sizes (groupId:artifactId:version -> size in bytes)
-    private final java.util.Map<String, Long> sizeCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Long> sizeCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+
+    @ConfigProperty(name = "vdt.deployed", defaultValue = "false")
+    boolean deployed;
+
+    public void httpStarted(
+            @ObservesAsync HttpServerStart start,
+            @ConfigProperty(name = "quarkus.http.port", defaultValue="8080") int port) {
+        if(!deployed) {
+            Open.open("http://localhost:" + port);
+        }
+    }
+
+    public boolean isLocal() {
+        return !deployed;
+    }
 
     /**
      * Resolves dependencies from Maven coordinates (groupId:artifactId:version).
@@ -89,18 +115,31 @@ public class MavenDependencyService {
      */
     public DependencyNode resolveDependenciesFromPom(String pomContent) throws Exception {
         // Create temporary directory for pom.xml
-        File tempDir = Files.createTempDirectory("maven-dep-analysis").toFile();
-        File pomFile = new File(tempDir, "pom.xml");
+        UUID uuid = UUID.randomUUID();
+
+        Path tempDir = Files.createDirectory(Path.of("mvntemp"+ uuid.toString()));
+        Path pomFile = tempDir.resolve("pom.xml");
+        pomFile.getParent().toFile().mkdirs();
 
         try {
             // Write POM content to temporary file
-            Files.write(pomFile.toPath(), pomContent.getBytes(StandardCharsets.UTF_8));
+            Files.write(pomFile, pomContent.getBytes(StandardCharsets.UTF_8));
 
             // Run mvn dependency:tree -Dverbose=true
             ProcessBuilder pb = new ProcessBuilder(
                 "mvn", "dependency:tree", "-Dverbose=true"
             );
-            pb.directory(tempDir);
+            if(Files.exists(Path.of("/etc/os-release"))) {
+                // This is for linux server, figure out how to detect jbang execution
+                pb = new ProcessBuilder("/usr/local/sdkman/candidates/maven/current/bin/mvn",
+                        "dependency:tree", "-Dverbose=true");
+                // Modify PATH if necessary
+                Map<String, String> env = pb.environment();
+                env.put("PATH", "/usr/local/sdkman/candidates/maven/current/bin:/usr/local/sdkman/candidates/java/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin");
+                env.put("MAVEN_HOME", "/usr/local/sdkman/candidates/maven/current");
+                env.put("JAVA_HOME", "/usr/local/sdkman/candidates/java/current");
+            }
+            pb.directory(tempDir.toFile());
             pb.redirectErrorStream(true);
 
             Process process = pb.start();
@@ -125,8 +164,8 @@ public class MavenDependencyService {
 
         } finally {
             // Clean up temporary files
-            pomFile.delete();
-            tempDir.delete();
+            Files.delete(pomFile);
+            Files.delete(tempDir);
         }
     }
 
@@ -134,6 +173,7 @@ public class MavenDependencyService {
      * Parses Maven dependency:tree output and builds DependencyNode tree.
      */
     private DependencyNode parseMavenTreeOutput(String output) throws Exception {
+        // Note uses raw text output as the json format doesn't include all the same data
         String[] lines = output.split("\n");
 
         // Find the start of the dependency tree
