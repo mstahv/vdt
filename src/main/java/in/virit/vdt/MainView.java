@@ -8,6 +8,7 @@ import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.checkbox.Checkbox;
 import com.vaadin.flow.component.combobox.ComboBox;
 import com.vaadin.flow.component.dialog.Dialog;
+import com.vaadin.flow.component.html.Anchor;
 import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.H1;
 import com.vaadin.flow.component.html.Paragraph;
@@ -333,7 +334,10 @@ public class MainView extends VerticalLayout {
             newAnalysisButton.addThemeVariants(ButtonVariant.LUMO_SMALL);
             newAnalysisButton.setVisible(false);
 
-            add(title, description, projectInfo, newAnalysisButton);
+            Anchor installLocally = new Anchor("https://github.com/mstahv/vdt", "Github/Install locally...");
+            installLocally.setVisible(!dependencyService.isLocal());
+
+            add(title, description, installLocally, projectInfo, newAnalysisButton);
             setFlexGrow(1, description);
             setFlexGrow(1, projectInfo);
         }
