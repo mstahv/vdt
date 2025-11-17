@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.Stack;
 import java.util.UUID;
@@ -111,7 +112,10 @@ public class MavenDependencyService {
 
     /**
      * Parses a pom.xml file and resolves its dependencies.
-     * Uses ProcessBuilder to run mvn dependency:tree -Dverbose=true for accurate verbose output.
+     * Runs mvn dependency:tree twice:
+     * 1. Without -Dverbose=true to get optionality information
+     * 2. With -Dverbose=true to get conflict resolution details
+     * Then merges the results to have complete information.
      */
     public DependencyNode resolveDependenciesFromPom(String pomContent) throws Exception {
         // Create temporary directory for pom.xml
@@ -125,48 +129,126 @@ public class MavenDependencyService {
             // Write POM content to temporary file
             Files.write(pomFile, pomContent.getBytes(StandardCharsets.UTF_8));
 
-            // Run mvn dependency:tree -Dverbose=true
-            ProcessBuilder pb = new ProcessBuilder(
-                "mvn", "dependency:tree", "-Dverbose=true"
-            );
-            if(Files.exists(Path.of("/etc/os-release"))) {
-                // This is for linux server, figure out how to detect jbang execution
-                pb = new ProcessBuilder("/usr/local/sdkman/candidates/maven/current/bin/mvn",
-                        "dependency:tree", "-Dverbose=true");
-                // Modify PATH if necessary
-                Map<String, String> env = pb.environment();
-                env.put("PATH", "/usr/local/sdkman/candidates/maven/current/bin:/usr/local/sdkman/candidates/java/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin");
-                env.put("MAVEN_HOME", "/usr/local/sdkman/candidates/maven/current");
-                env.put("JAVA_HOME", "/usr/local/sdkman/candidates/java/current");
-            }
-            pb.directory(tempDir.toFile());
-            pb.redirectErrorStream(true);
+            // Run mvn dependency:tree WITHOUT verbose to get optionality info
+            String simpleOutput = runMavenDependencyTree(tempDir, false);
+            DependencyNode simpleTree = parseMavenTreeOutput(simpleOutput);
 
-            Process process = pb.start();
+            // Run mvn dependency:tree WITH verbose to get conflict resolution details
+            String verboseOutput = runMavenDependencyTree(tempDir, true);
+            DependencyNode verboseTree = parseMavenTreeOutput(verboseOutput);
 
-            // Read output
-            StringBuilder output = new StringBuilder();
-            try (java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
-                }
-            }
+            // Merge the two trees: take verbose as base and copy optionality from simple
+            mergeDependencyTrees(verboseTree, simpleTree);
 
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                throw new Exception("Maven command failed with exit code " + exitCode + ":\n" + output.toString());
-            }
-
-            // Parse the dependency tree from Maven output
-            return parseMavenTreeOutput(output.toString());
+            return verboseTree;
 
         } finally {
             // Clean up temporary files
             Files.delete(pomFile);
             Files.delete(tempDir);
         }
+    }
+
+    /**
+     * Runs mvn dependency:tree command in the specified directory.
+     * @param tempDir directory containing pom.xml
+     * @param verbose whether to use -Dverbose=true flag
+     * @return Maven command output
+     */
+    private String runMavenDependencyTree(Path tempDir, boolean verbose) throws Exception {
+        ProcessBuilder pb;
+        if (verbose) {
+            pb = new ProcessBuilder("mvn", "dependency:tree", "-Dverbose=true");
+        } else {
+            pb = new ProcessBuilder("mvn", "dependency:tree");
+        }
+
+        if(Files.exists(Path.of("/etc/os-release"))) {
+            // This is for linux server, figure out how to detect jbang execution
+            if (verbose) {
+                pb = new ProcessBuilder("/usr/local/sdkman/candidates/maven/current/bin/mvn",
+                        "dependency:tree", "-Dverbose=true");
+            } else {
+                pb = new ProcessBuilder("/usr/local/sdkman/candidates/maven/current/bin/mvn",
+                        "dependency:tree");
+            }
+            // Modify PATH if necessary
+            Map<String, String> env = pb.environment();
+            env.put("PATH", "/usr/local/sdkman/candidates/maven/current/bin:/usr/local/sdkman/candidates/java/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin");
+            env.put("MAVEN_HOME", "/usr/local/sdkman/candidates/maven/current");
+            env.put("JAVA_HOME", "/usr/local/sdkman/candidates/java/current");
+        }
+        pb.directory(tempDir.toFile());
+        pb.redirectErrorStream(true);
+
+        Process process = pb.start();
+
+        // Read output
+        StringBuilder output = new StringBuilder();
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
+        }
+
+        int exitCode = process.waitFor();
+        if (exitCode != 0) {
+            throw new Exception("Maven command failed with exit code " + exitCode + ":\n" + output.toString());
+        }
+
+        return output.toString();
+    }
+
+    /**
+     * Merges optionality information from simpleTree into verboseTree.
+     * The verbose tree has better conflict resolution info but loses optionality data.
+     * @param verboseTree tree from verbose run (will be modified)
+     * @param simpleTree tree from simple run (source of optionality info)
+     */
+    private void mergeDependencyTrees(DependencyNode verboseTree, DependencyNode simpleTree) {
+        if (verboseTree == null || simpleTree == null) {
+            return;
+        }
+
+        // Copy optionality from simple to verbose (root level)
+        if (simpleTree.isOptional()) {
+            verboseTree.setOptional(true);
+        }
+
+        // Recursively merge children
+        if (verboseTree.getChildren() != null && simpleTree.getChildren() != null) {
+            for (DependencyNode verboseChild : verboseTree.getChildren()) {
+                // Find matching child in simple tree
+                DependencyNode simpleChild = findMatchingNode(simpleTree.getChildren(),
+                        verboseChild.getGroupId(), verboseChild.getArtifactId());
+
+                if (simpleChild != null) {
+                    // Copy optionality
+                    if (simpleChild.isOptional()) {
+                        verboseChild.setOptional(true);
+                    }
+                    // Recursively merge children
+                    mergeDependencyTrees(verboseChild, simpleChild);
+                }
+            }
+        }
+    }
+
+    /**
+     * Finds a node in the list matching the given groupId and artifactId.
+     */
+    private DependencyNode findMatchingNode(List<DependencyNode> nodes, String groupId, String artifactId) {
+        if (nodes == null) {
+            return null;
+        }
+        for (DependencyNode node : nodes) {
+            if (groupId.equals(node.getGroupId()) && artifactId.equals(node.getArtifactId())) {
+                return node;
+            }
+        }
+        return null;
     }
 
     /**

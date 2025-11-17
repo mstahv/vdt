@@ -40,3 +40,4 @@ build/
 
 ### Vaadin Generated Files ###
 src/main/frontend/generated/
+node_modules

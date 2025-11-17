@@ -32,6 +32,12 @@
     <dependencies>
         <dependency>
             <groupId>com.vaadin</groupId>
+            <artifactId>vaadin-dev</artifactId>
+            <version>25.0.0-beta5</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.vaadin</groupId>
             <artifactId>vaadin-quarkus-extension</artifactId>
             <version>25.0.0-beta4</version>
         </dependency>
